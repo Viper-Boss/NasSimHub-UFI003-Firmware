@@ -1,0 +1,7 @@
+// Install only with the explicitly enabled, validated voice service.
+polkit.addRule(function(action, subject) {
+    if (subject.user === "nassimhub" &&
+        action.id === "org.freedesktop.ModemManager1.Voice") {
+        return polkit.Result.YES;
+    }
+});

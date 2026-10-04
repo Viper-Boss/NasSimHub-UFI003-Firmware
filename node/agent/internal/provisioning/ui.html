@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NasSimHub Node 配网</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #16181d;
+    --muted: #5b6270;
+    --line: #d9dde5;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --accent: #2f6fed;
+    --ok: #1c7a4a;
+    --warn: #9a5b00;
+    --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e9ecf1; --muted: #9aa3b2; --line: #333944;
+      --bg: #14161a; --card: #1c1f26; --accent: #6c9bff;
+      --ok: #5ac48b; --warn: #e0a33c; --bad: #ff8a80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--ink);
+  }
+  main { max-width: 480px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 8px 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 16px; margin-bottom: 12px;
+  }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; font-size: 14px; }
+  .row span:first-child { color: var(--muted); }
+  .row span:last-child { font-variant-numeric: tabular-nums; text-align: right; word-break: break-all; }
+  button {
+    font: inherit; font-weight: 600; width: 100%;
+    padding: 12px 16px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--card); color: var(--ink); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button[disabled] { opacity: .55; cursor: default; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  input, select {
+    font: inherit; width: 100%; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg); color: var(--ink);
+  }
+  ul { list-style: none; margin: 8px 0 0; padding: 0; }
+  li { border-top: 1px solid var(--line); }
+  li:first-child { border-top: 0; }
+  li button {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    border: 0; border-radius: 0; background: none; text-align: left; padding: 12px 2px;
+  }
+  li button[aria-pressed="true"] { color: var(--accent); }
+  .bars { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .state { font-weight: 600; }
+  .state.ok { color: var(--ok); }
+  .state.busy { color: var(--warn); }
+  .state.bad { color: var(--bad); }
+  .note { font-size: 13px; color: var(--muted); margin-top: 12px; }
+  .hide { display: none; }
+  .msg { font-size: 14px; margin-top: 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); }
+  .msg.bad { color: var(--bad); border-color: var(--bad); }
+  .msg.ok { color: var(--ok); border-color: var(--ok); }
+</style>
+</head>
+<body>
+<main>
+  <h1>NasSimHub Node</h1>
+  <p class="sub" id="subtitle">正在读取设备状态…</p>
+
+  <section class="card">
+    <div class="row"><span>设备 ID</span><span id="device-id">—</span></div>
+    <div class="row"><span>型号</span><span id="model">—</span></div>
+    <div class="row"><span>软件版本</span><span id="version">—</span></div>
+    <div class="row"><span>配对状态</span><span id="pairing">—</span></div>
+    <div class="row"><span>Wi-Fi 状态</span><span class="state" id="wifi-state">—</span></div>
+  </section>
+
+  <section class="card" id="pick">
+    <button id="scan" class="primary">扫描附近的 Wi-Fi</button>
+    <ul id="networks"></ul>
+
+    <label for="ssid">网络名称（SSID）</label>
+    <input id="ssid" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如 MyHome-5G">
+
+    <label for="psk">密码</label>
+    <input id="psk" type="password" autocomplete="off" placeholder="开放网络可留空">
+
+    <div style="margin-top:16px">
+      <button id="connect" class="primary">连接</button>
+    </div>
+    <div id="msg" class="msg hide"></div>
+  </section>
+
+  <p class="note">
+    这个页面只在设备处于配网模式时存在。设备成功加入网络后，本页面与配网接口都会立即关闭；
+    之后请在 NAS 上的 NasSimHub 里添加这台设备。<br>
+    此页面不会显示短信内容、通话记录、SIM 卡标识或任何日志。
+  </p>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var selected = null;
+  var polling = null;
+
+  // Everything below talks only to this device. There is no other origin in
+  // this file, on purpose: the device has no internet connection yet.
+  function api(path, method, body) {
+    return fetch(path, {
+      method: method || "GET",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store"
+    }).then(function (response) {
+      return response.text().then(function (text) {
+        var payload = null;
+        if (text) { try { payload = JSON.parse(text); } catch (e) { payload = null; } }
+        if (!response.ok) {
+          var detail = (payload && (payload.message || payload.error)) || ("HTTP " + response.status);
+          throw new Error(detail);
+        }
+        return payload;
+      });
+    });
+  }
+
+  function text(id, value) { $(id).textContent = value || "—"; }
+
+  function message(kind, value) {
+    var box = $("msg");
+    box.className = "msg " + kind;
+    box.textContent = value;
+    box.classList.remove("hide");
+  }
+
+  function clearMessage() { $("msg").classList.add("hide"); }
+
+  var STATE_LABEL = {
+    NO_WIFI_CONFIG: ["尚未配置", "busy"],
+    PROVISIONING_AP: ["配网模式", "busy"],
+    CONNECTING: ["正在连接…", "busy"],
+    CONNECTED: ["已连接", "ok"],
+    FAILED: ["连接失败", "bad"]
+  };
+
+  function renderStatus(status) {
+    text("device-id", status.device_id);
+    text("model", status.model);
+    text("version", status.agent_version);
+    text("pairing", status.pairing_state === "PAIRED" ? "已配对" : "未配对");
+
+    var label = STATE_LABEL[status.wifi_state] || [status.wifi_state, ""];
+    var node = $("wifi-state");
+    node.textContent = label[0];
+    node.className = "state " + label[1];
+
+    if (status.wifi_state === "CONNECTED") {
+      $("subtitle").textContent = "设备已加入网络，接下来请在 NAS 上添加它。";
+      $("pick").classList.add("hide");
+      message("ok", "已连接。这个页面马上就会关闭，属于正常现象。");
+      stopPolling();
+      return;
+    }
+    if (status.wifi_state === "FAILED" && status.failure_reason) {
+      message("bad", "上一次连接失败：" + status.failure_reason);
+    }
+    $("subtitle").textContent = "为这台设备选择一个 Wi-Fi 网络。";
+  }
+
+  function refresh() {
+    return api("/provision/status").then(renderStatus).catch(function (error) {
+      // Once the device joins a network this endpoint disappears, which is the
+      // designed behaviour rather than a fault - so it is not reported as one.
+      $("subtitle").textContent = "配网已结束，或设备已离开配网模式。";
+      stopPolling();
+      throw error;
+    });
+  }
+
+  function startPolling() {
+    if (polling) { return; }
+    polling = setInterval(function () { refresh().catch(function () {}); }, 3000);
+  }
+
+  function stopPolling() {
+    if (polling) { clearInterval(polling); polling = null; }
+  }
+
+  function bars(dbm) {
+    if (typeof dbm !== "number") { return "—"; }
+    var n = dbm >= -65 ? 5 : dbm >= -75 ? 4 : dbm >= -85 ? 3 : dbm >= -95 ? 2 : 1;
+    return "▮".repeat(n) + "▯".repeat(5 - n);
+  }
+
+  function renderNetworks(list) {
+    var ul = $("networks");
+    ul.textContent = "";
+    if (!list || !list.length) {
+      var empty = document.createElement("li");
+      var span = document.createElement("button");
+      span.type = "button";
+      span.disabled = true;
+      span.textContent = "没有扫描到网络";
+      empty.appendChild(span);
+      ul.appendChild(empty);
+      return;
+    }
+    list.forEach(function (network) {
+      var item = document.createElement("li");
+      var button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("aria-pressed", String(selected === network.ssid));
+
+      var name = document.createElement("span");
+      // textContent, never innerHTML: an SSID is attacker-chosen text and the
+      // access point it came from is not this device's.
+      name.textContent = network.ssid + (network.security === "open" ? "（开放）" : "");
+      var strength = document.createElement("span");
+      strength.className = "bars";
+      strength.textContent = bars(network.signal_dbm);
+
+      button.appendChild(name);
+      button.appendChild(strength);
+      button.addEventListener("click", function () {
+        selected = network.ssid;
+        $("ssid").value = network.ssid;
+        $("psk").disabled = network.security === "open";
+        renderNetworks(list);
+        $("psk").focus();
+      });
+      item.appendChild(button);
+      ul.appendChild(item);
+    });
+  }
+
+  $("scan").addEventListener("click", function () {
+    clearMessage();
+    var button = $("scan");
+    button.disabled = true;
+    button.textContent = "扫描中…";
+    api("/provision/scan", "POST", {}).then(function (result) {
+      renderNetworks(result && result.networks);
+    }).catch(function (error) {
+      message("bad", "扫描失败：" + error.message);
+    }).then(function () {
+      button.disabled = false;
+      button.textContent = "扫描附近的 Wi-Fi";
+    });
+  });
+
+  $("connect").addEventListener("click", function () {
+    clearMessage();
+    var ssid = $("ssid").value.trim();
+    if (!ssid) {
+      message("bad", "请先选择或输入网络名称。");
+      return;
+    }
+    var button = $("connect");
+    button.disabled = true;
+    button.textContent = "连接中…";
+    api("/provision/connect", "POST", { ssid: ssid, psk: $("psk").value })
+      .then(function (status) {
+        // The password is not kept in the page any longer than it takes to
+        // send it.
+        $("psk").value = "";
+        renderStatus(status);
+        startPolling();
+      })
+      .catch(function (error) {
+        message("bad", "连接失败：" + error.message);
+      })
+      .then(function () {
+        button.disabled = false;
+        button.textContent = "连接";
+      });
+  });
+
+  refresh().then(startPolling).catch(function () {});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+[Unit]
+Description=Read NasSimHub LTE radio facts
+After=ModemManager.service
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/nassimhub/query-radio-status
+TimeoutStartSec=12

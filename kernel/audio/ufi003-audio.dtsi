@@ -1,0 +1,184 @@
+// NasSimHub UFI003: enable QDSP6 audio (APR services + msm8916-qdsp6 sound card)
+// on top of the stick's existing DTB. Nodes are referenced by path because the
+// shipped DTB carries no __symbols__. Content mirrors the kernel's own
+// arch/arm64/boot/dts/qcom/msm8916-modem-qdsp6.dtsi (KyonLi 6.12.49-1), minus
+// the parts the stick already enables (mpss, bam-dmux) and minus memshare,
+// gps_mem and mba_mem, whose current state is left exactly as shipped.
+//
+// The stick has no speaker or microphone. The backends only give the DSP a
+// valid port for the voice path; call audio is taken to userspace by the
+// stage C pseudo ports, not by these physical links.
+
+#include <dt-bindings/sound/qcom,q6afe.h>
+#include <dt-bindings/sound/qcom,q6asm.h>
+#include <dt-bindings/sound/qcom,q6voice.h>
+
+&{/soc@0/remoteproc@4080000/smd-edge/apr} {
+	status = "okay";
+};
+
+&{/soc@0/remoteproc@4080000/smd-edge/apr/service@4/dais} {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	dai@16 {
+		reg = <PRIMARY_MI2S_RX>;
+		qcom,sd-lines = <0 1>;
+	};
+
+	dai@21 {
+		reg = <TERTIARY_MI2S_TX>;
+		qcom,sd-lines = <0 1>;
+	};
+};
+
+&{/soc@0/remoteproc@4080000/smd-edge/apr/service@7/dais} {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	dai@0 {
+		reg = <0>;
+		direction = <Q6ASM_DAI_RX>;
+	};
+
+	dai@1 {
+		reg = <1>;
+		direction = <Q6ASM_DAI_TX>;
+	};
+
+	dai@2 {
+		reg = <2>;
+		direction = <Q6ASM_DAI_RX>;
+	};
+
+	dai@3 {
+		reg = <3>;
+		direction = <Q6ASM_DAI_TX>;
+	};
+};
+
+&{/soc@0/audio-codec@771c000} {
+	status = "okay";
+};
+
+&{/soc@0/spmi@200f000/pmic@1/audio-codec@f000} {
+	status = "okay";
+};
+
+&{/soc@0/sound@7702000} {
+	compatible = "qcom,msm8916-qdsp6-sndcard";
+	model = "nassimhub-ufi003";
+
+	pinctrl-0 = <&{/soc@0/pinctrl@1000000/cdc-pdm-default-state}>;
+	pinctrl-1 = <&{/soc@0/pinctrl@1000000/cdc-pdm-sleep-state}>;
+	pinctrl-names = "default", "sleep";
+
+	status = "okay";
+
+	frontend0-dai-link {
+		link-name = "MultiMedia1";
+
+		cpu {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@7/dais} MSM_FRONTEND_DAI_MULTIMEDIA1>;
+		};
+	};
+
+	frontend1-dai-link {
+		link-name = "MultiMedia2";
+
+		cpu {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@7/dais} MSM_FRONTEND_DAI_MULTIMEDIA2>;
+		};
+	};
+
+	frontend2-dai-link {
+		link-name = "MultiMedia3";
+
+		cpu {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@7/dais} MSM_FRONTEND_DAI_MULTIMEDIA3>;
+		};
+	};
+
+	frontend3-dai-link {
+		link-name = "MultiMedia4";
+
+		cpu {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@7/dais} MSM_FRONTEND_DAI_MULTIMEDIA4>;
+		};
+	};
+
+	frontend4-dai-link {
+		link-name = "CS-Voice";
+
+		cpu {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/apr-service@9/dais}>;
+		};
+	};
+
+	backend0-dai-link {
+		link-name = "Primary MI2S";
+
+		cpu {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@4/dais} PRIMARY_MI2S_RX>;
+		};
+		platform {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@8/routing}>;
+		};
+		codec {
+			sound-dai = <&{/soc@0/audio-codec@771c000} 0>, <&{/soc@0/spmi@200f000/pmic@1/audio-codec@f000} 0>;
+		};
+	};
+
+	/*
+	 * In-call audio for the host (needs the stage C q6 module set; with the
+	 * stock modules these links fail to bind and the card does not probe).
+	 * 136/137/138 = VOICE_RECORD_RX / VOICE_RECORD_TX / VOICE_PLAYBACK_TX in
+	 * q6afe-pseudo-ports.h. No codec: DSP-internal backends.
+	 */
+	backend2-dai-link {
+		link-name = "Incall Record RX";
+
+		cpu {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@4/dais} 136>;
+		};
+		platform {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@8/routing}>;
+		};
+	};
+
+	backend3-dai-link {
+		link-name = "Incall Record TX";
+
+		cpu {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@4/dais} 137>;
+		};
+		platform {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@8/routing}>;
+		};
+	};
+
+	backend4-dai-link {
+		link-name = "Incall Music TX";
+
+		cpu {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@4/dais} 138>;
+		};
+		platform {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@8/routing}>;
+		};
+	};
+
+	backend1-dai-link {
+		link-name = "Tertiary MI2S";
+
+		cpu {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@4/dais} TERTIARY_MI2S_TX>;
+		};
+		platform {
+			sound-dai = <&{/soc@0/remoteproc@4080000/smd-edge/apr/service@8/routing}>;
+		};
+		codec {
+			sound-dai = <&{/soc@0/audio-codec@771c000} 1>, <&{/soc@0/spmi@200f000/pmic@1/audio-codec@f000} 1>;
+		};
+	};
+};

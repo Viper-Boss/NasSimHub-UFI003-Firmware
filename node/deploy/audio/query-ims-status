@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+umask 022
+# Re-enable optional signal sampling after ModemManager restarts; never reset an active sampler.
+if timeout 5 mmcli -m any --signal-get -K 2>/dev/null | grep -Eq 'modem.signal.refresh.rate[[:space:]]*:[[:space:]]*0$'; then
+    timeout 5 mmcli -m any --signal-setup=15 >/dev/null 2>&1 || :
+fi
+target=/run/nassimhub-ims/registration
+tmp=/run/nassimhub-ims/registration.new
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+if timeout 5 qmicli -p -d /dev/wwan0qmi0 --imsa-get-ims-registration-status >"$tmp" && timeout 5 qmicli -p -d /dev/wwan0qmi0 --imsa-get-ims-services-status >>"$tmp"; then
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$target"
+else
+    rm -f "$target"
+    exit 1
+fi

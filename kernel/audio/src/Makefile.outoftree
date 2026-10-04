@@ -1,0 +1,6 @@
+# NasSimHub UFI003 in-call audio: full replacement set of the Qualcomm QDSP6
+# ASoC modules plus the msm8916 machine driver, built from one patched source.
+obj-m += snd-soc-qcom-common.o snd-soc-apq8016-sbc.o
+snd-soc-qcom-common-y := common.o
+snd-soc-apq8016-sbc-y := apq8016_sbc.o
+obj-m += qdsp6/

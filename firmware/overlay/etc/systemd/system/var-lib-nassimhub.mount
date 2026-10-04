@@ -1,0 +1,9 @@
+[Unit]
+Description=NasSimHub dedicated persistent identity storage
+JobTimeoutSec=15s
+[Mount]
+What=/dev/disk/by-label/NSHSTATE
+Where=/var/lib/nassimhub
+Type=ext4
+Options=rw,nosuid,nodev,noexec
+TimeoutSec=10s

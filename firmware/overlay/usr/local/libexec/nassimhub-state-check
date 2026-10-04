@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+mountpoint -q /var/lib/nassimhub || { echo 'NSHSTATE persistent mount missing' >&2; exit 1; }
+[ "$(findmnt -n -o FSTYPE --target /var/lib/nassimhub)" = ext4 ] || exit 1
+[ "$(findmnt -n -o LABEL --target /var/lib/nassimhub)" = NSHSTATE ] || exit 1
+case ",$(findmnt -n -o OPTIONS --target /var/lib/nassimhub)," in *,rw,*) ;; *) exit 1;; esac
+[ "$(stat -c %d /var/lib/nassimhub)" != "$(stat -c %d /)" ] || exit 1

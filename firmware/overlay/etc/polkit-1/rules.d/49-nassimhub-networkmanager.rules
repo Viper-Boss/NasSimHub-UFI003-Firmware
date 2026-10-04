@@ -1,0 +1,12 @@
+// NetworkManager authorizes these operations at system scope, not per SSID.
+// The dedicated service account must not be usable for interactive login.
+polkit.addRule(function(action, subject) {
+    var allowed = [
+        "org.freedesktop.NetworkManager.network-control",
+        "org.freedesktop.NetworkManager.settings.modify.system",
+        "org.freedesktop.NetworkManager.wifi.scan"
+    ];
+    if (subject.user === "nassimhub" && allowed.indexOf(action.id) >= 0) {
+        return polkit.Result.YES;
+    }
+});

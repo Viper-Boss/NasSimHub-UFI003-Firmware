@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+umask 022
+mkdir -p /run/nassimhub-ims
+target=/run/nassimhub-ims/radio.metrics
+tmp=$(mktemp /run/nassimhub-ims/radio.XXXXXX)
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+rf=$(timeout 4 qmicli -p -d /dev/wwan0qmi0 --nas-get-rf-band-info) || { rm -f "$target"; exit 1; }
+cell=$(timeout 4 qmicli -p -d /dev/wwan0qmi0 --nas-get-cell-location-info) || { rm -f "$target"; exit 1; }
+band=$(printf '%s\n' "$rf" | sed -n "s/.*Active Band Class: 'eutran-\([0-9][0-9]*\)'.*/\1/p" | head -1)
+earfcn=$(printf '%s\n' "$cell" | sed -n "s/.*EUTRA Absolute RF Channel Number: '\([0-9][0-9]*\)'.*/\1/p" | head -1)
+pci=$(printf '%s\n' "$cell" | sed -n "s/.*Serving Cell ID: '\([0-9][0-9]*\)'.*/\1/p" | head -1)
+tac=$(printf '%s\n' "$cell" | sed -n "s/.*Tracking Area Code: '\([0-9][0-9]*\)'.*/\1/p" | head -1)
+cid=$(printf '%s\n' "$cell" | sed -n "s/.*Global Cell ID: '\([0-9][0-9]*\)'.*/\1/p" | head -1)
+for pair in "band=$band" "earfcn=$earfcn" "pci=$pci" "tac=$tac" "cell_id=$cid"; do
+ value=${pair#*=}; case "$value" in ''|*[!0-9]*) continue;; esac
+ printf '%s\n' "$pair" >>"$tmp"
+done
+chmod 0644 "$tmp"
+mv -f "$tmp" "$target"

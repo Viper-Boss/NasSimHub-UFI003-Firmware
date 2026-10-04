@@ -1,0 +1,8 @@
+[Unit]
+Description=Verify NasSimHub persistent identity storage
+RequiresMountsFor=/var/lib/nassimhub
+Before=nassimhub-agent.service nassimhub-usb.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/nassimhub-firstboot
+RemainAfterExit=yes

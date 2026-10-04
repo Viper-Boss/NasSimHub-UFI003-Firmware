@@ -1,0 +1,8 @@
+[Unit]
+Description=Sample NasSimHub LTE radio facts
+[Timer]
+OnBootSec=15
+OnUnitInactiveSec=15
+AccuracySec=1
+[Install]
+WantedBy=timers.target

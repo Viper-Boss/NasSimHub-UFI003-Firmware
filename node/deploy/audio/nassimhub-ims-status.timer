@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh NasSimHub read-only IMS registration status
+
+[Timer]
+OnBootSec=3
+OnUnitInactiveSec=5
+AccuracySec=1
+Unit=nassimhub-ims-status.service
+
+[Install]
+WantedBy=timers.target

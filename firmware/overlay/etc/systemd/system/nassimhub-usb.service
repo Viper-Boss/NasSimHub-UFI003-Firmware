@@ -1,0 +1,11 @@
+[Unit]
+Description=NasSimHub developer USB NCM gadget
+Requires=nassimhub-firstboot.service
+After=nassimhub-firstboot.service systemd-modules-load.service
+Before=NetworkManager.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/nassimhub-usb
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

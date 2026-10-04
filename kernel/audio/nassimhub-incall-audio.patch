@@ -1,0 +1,984 @@
+diff -ruN -x '*.o' -x '*.ko' orig/apq8016_sbc.c src/apq8016_sbc.c
+--- a/sound/soc/qcom/apq8016_sbc.c	2026-09-29 00:56:25.466726892 +0000
++++ b/sound/soc/qcom/apq8016_sbc.c	2026-09-29 01:00:39.460204907 +0000
+@@ -185,9 +185,14 @@
+ static int msm8916_qdsp6_dai_init(struct snd_soc_pcm_runtime *rtd)
+ {
+ 	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
++	int mi2s = qdsp6_dai_get_lpass_id(cpu_dai);
++
++	/* DSP-internal backends (pseudo ports) have no MI2S to set up. */
++	if (mi2s < 0)
++		return 0;
+ 
+ 	snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_BP_FP);
+-	return apq8016_dai_init(rtd, qdsp6_dai_get_lpass_id(cpu_dai));
++	return apq8016_dai_init(rtd, mi2s);
+ }
+ 
+ static int msm8916_qdsp6_startup(struct snd_pcm_substream *substream)
+@@ -200,7 +205,7 @@
+ 
+ 	mi2s = qdsp6_dai_get_lpass_id(cpu_dai);
+ 	if (mi2s < 0)
+-		return mi2s;
++		return 0; /* no MI2S clock behind a pseudo port */
+ 
+ 	if (++data->mi2s_clk_count[mi2s] > 1)
+ 		return 0;
+diff -ruN -x '*.o' -x '*.ko' orig/common.c src/common.c
+--- a/sound/soc/qcom/common.c	2026-09-29 00:56:25.466772033 +0000
++++ b/sound/soc/qcom/common.c	2026-09-29 01:00:39.459984616 +0000
+@@ -146,6 +146,15 @@
+ 				link->no_pcm = 1;
+ 				link->ignore_pmdown_time = 1;
+ 			}
++		} else if (platform) {
++			/*
++			 * DPCM backend without a codec: a DSP-internal port such
++			 * as the in-call record/playback pseudo ports.
++			 */
++			link->codecs	 = &snd_soc_dummy_dlc;
++			link->num_codecs = 1;
++			link->no_pcm = 1;
++			link->ignore_pmdown_time = 1;
+ 		} else {
+ 			/* DPCM frontend */
+ 			link->codecs	 = &snd_soc_dummy_dlc;
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6afe-dai.c src/qdsp6/q6afe-dai.c
+--- a/sound/soc/qcom/qdsp6/q6afe-dai.c	2026-09-29 00:56:25.468356550 +0000
++++ b/sound/soc/qcom/qdsp6/q6afe-dai.c	2026-09-29 00:58:03.559343728 +0000
+@@ -334,6 +334,25 @@
+ 
+ 	return 0;
+ }
++static int q6pseudo_hw_params(struct snd_pcm_substream *substream,
++			      struct snd_pcm_hw_params *params,
++			      struct snd_soc_dai *dai)
++{
++	struct q6afe_dai_data *dai_data = dev_get_drvdata(dai->dev);
++	struct q6afe_pseudo_cfg *pseudo = &dai_data->port_config[dai->id].pseudo;
++
++	if (params_format(params) != SNDRV_PCM_FORMAT_S16_LE) {
++		dev_err(dai->dev, "pseudo port supports S16_LE only\n");
++		return -EINVAL;
++	}
++
++	pseudo->sample_rate = params_rate(params);
++	pseudo->num_channels = params_channels(params);
++	pseudo->bit_width = 16;
++
++	return 0;
++}
++
+ static void q6afe_dai_shutdown(struct snd_pcm_substream *substream,
+ 				struct snd_soc_dai *dai)
+ {
+@@ -394,6 +413,10 @@
+ 		q6afe_cdc_dma_port_prepare(dai_data->port[dai->id],
+ 					   &dai_data->port_config[dai->id].dma_cfg);
+ 		break;
++	case VOICE_RECORD_RX ... VOICE_PLAYBACK_TX:
++		q6afe_pseudo_port_prepare(dai_data->port[dai->id],
++					  &dai_data->port_config[dai->id].pseudo);
++		break;
+ 	default:
+ 		return -EINVAL;
+ 	}
+@@ -499,6 +522,7 @@
+ 	{"SLIMBUS_6_TX", NULL, "Slimbus6 Capture"},
+ 
+ 	{"Primary MI2S Playback", NULL, "PRI_MI2S_RX"},
++	{"Voice Farend Playback", NULL, "VOICE_PLAYBACK_TX"},
+ 	{"Secondary MI2S Playback", NULL, "SEC_MI2S_RX"},
+ 	{"Tertiary MI2S Playback", NULL, "TERT_MI2S_RX"},
+ 	{"Quaternary MI2S Playback", NULL, "QUAT_MI2S_RX"},
+@@ -596,6 +620,8 @@
+ 
+ 	{"TERT_MI2S_TX", NULL, "Tertiary MI2S Capture"},
+ 	{"PRI_MI2S_TX", NULL, "Primary MI2S Capture"},
++	{"VOICE_RECORD_RX", NULL, "Voice Downlink Capture"},
++	{"VOICE_RECORD_TX", NULL, "Voice Uplink Capture"},
+ 	{"SEC_MI2S_TX", NULL, "Secondary MI2S Capture"},
+ 	{"QUAT_MI2S_TX", NULL, "Quaternary MI2S Capture"},
+ 	{"QUIN_MI2S_TX", NULL, "Quinary MI2S Capture"},
+@@ -687,6 +713,14 @@
+ 	.hw_params		= q6tdm_hw_params,
+ };
+ 
++static const struct snd_soc_dai_ops q6pseudo_ops = {
++	.probe			= msm_dai_q6_dai_probe,
++	.remove			= msm_dai_q6_dai_remove,
++	.prepare		= q6afe_dai_prepare,
++	.hw_params		= q6pseudo_hw_params,
++	.shutdown		= q6afe_dai_shutdown,
++};
++
+ static const struct snd_soc_dai_ops q6dma_ops = {
+ 	.probe			= msm_dai_q6_dai_probe,
+ 	.remove			= msm_dai_q6_dai_remove,
+@@ -699,6 +733,9 @@
+ 
+ static const struct snd_soc_dapm_widget q6afe_dai_widgets[] = {
+ 	SND_SOC_DAPM_AIF_IN("HDMI_RX", NULL, 0, SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_AIF_IN("VOICE_PLAYBACK_TX", NULL, 0, SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_AIF_OUT("VOICE_RECORD_RX", NULL, 0, SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_AIF_OUT("VOICE_RECORD_TX", NULL, 0, SND_SOC_NOPM, 0, 0),
+ 	SND_SOC_DAPM_AIF_IN("SLIMBUS_0_RX", NULL, 0, SND_SOC_NOPM, 0, 0),
+ 	SND_SOC_DAPM_AIF_IN("SLIMBUS_1_RX", NULL, 0, SND_SOC_NOPM, 0, 0),
+ 	SND_SOC_DAPM_AIF_IN("SLIMBUS_2_RX", NULL, 0, SND_SOC_NOPM, 0, 0),
+@@ -1061,6 +1098,7 @@
+ 	cfg.q6i2s_ops = &q6i2s_ops;
+ 	cfg.q6tdm_ops = &q6tdm_ops;
+ 	cfg.q6dma_ops = &q6dma_ops;
++	cfg.q6pseudo_ops = &q6pseudo_ops;
+ 	dais = q6dsp_audio_ports_set_config(dev, &cfg, &num_dais);
+ 
+ 	return devm_snd_soc_register_component(dev, &q6afe_dai_component, dais, num_dais);
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6afe-pseudo-ports.h src/qdsp6/q6afe-pseudo-ports.h
+--- a/sound/soc/qcom/qdsp6/q6afe-pseudo-ports.h	1970-01-01 00:00:00.000000000 +0000
++++ b/sound/soc/qcom/qdsp6/q6afe-pseudo-ports.h	2026-09-29 00:56:25.476577299 +0000
+@@ -0,0 +1,19 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * In-call record / playback pseudo ports (NasSimHub UFI003).
++ *
++ * The DSP exposes the downlink and uplink of an ongoing call on pseudo AFE
++ * ports 0x8003 / 0x8004 and accepts audio mixed into the uplink on 0x8005
++ * ("incall music"). These are the virtual port indices this driver uses for
++ * them. They are kept out of include/dt-bindings on purpose: the module set is
++ * built out of tree against the shipped kernel headers, so device trees refer
++ * to them by number.
++ */
++#ifndef __Q6AFE_PSEUDO_PORTS_H__
++#define __Q6AFE_PSEUDO_PORTS_H__
++
++#define VOICE_RECORD_RX		136	/* call downlink (far end), DSP -> host */
++#define VOICE_RECORD_TX		137	/* call uplink (near end), DSP -> host */
++#define VOICE_PLAYBACK_TX	138	/* host -> mixed into call uplink */
++
++#endif /* __Q6AFE_PSEUDO_PORTS_H__ */
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6afe.c src/qdsp6/q6afe.c
+--- a/sound/soc/qcom/qdsp6/q6afe.c	2026-09-29 00:56:25.468434264 +0000
++++ b/sound/soc/qcom/qdsp6/q6afe.c	2026-09-29 00:57:36.818031539 +0000
+@@ -44,6 +44,9 @@
+ #define AFE_PARAM_ID_TDM_CONFIG	0x0001029D
+ #define AFE_PARAM_ID_PORT_SLOT_MAPPING_CONFIG	0x00010297
+ #define AFE_PARAM_ID_CODEC_DMA_CONFIG	0x000102B8
++#define AFE_PARAM_ID_PSEUDO_PORT_CONFIG	0x00010219
++#define AFE_API_VERSION_PSEUDO_PORT_CONFIG	0x1
++#define AFE_PSEUDOPORT_TIMING_MODE_TIMER	0x1
+ #define AFE_CMD_REMOTE_LPASS_CORE_HW_VOTE_REQUEST	0x000100f4
+ #define AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST   0x000100f5
+ #define AFE_CMD_REMOTE_LPASS_CORE_HW_DEVOTE_REQUEST	0x000100f6
+@@ -113,6 +116,9 @@
+ #define AFE_PORT_ID_SLIMBUS_MULTI_CHAN_6_RX      0x400c
+ /* SLIMbus Tx port on channel 6. */
+ #define AFE_PORT_ID_SLIMBUS_MULTI_CHAN_6_TX      0x400d
++#define AFE_PORT_ID_VOICE_RECORD_RX		0x8003
++#define AFE_PORT_ID_VOICE_RECORD_TX		0x8004
++#define AFE_PORT_ID_VOICE_PLAYBACK_TX		0x8005
+ #define AFE_PORT_ID_PRIMARY_MI2S_RX         0x1000
+ #define AFE_PORT_ID_PRIMARY_MI2S_TX         0x1001
+ #define AFE_PORT_ID_SECONDARY_MI2S_RX       0x1002
+@@ -513,7 +519,18 @@
+ 	u16	active_channels_mask;
+ } __packed;
+ 
++/* Payload of AFE_PARAM_ID_PSEUDO_PORT_CONFIG */
++struct afe_param_id_pseudo_port_cfg {
++	u32	pseud_port_cfg_minor_version;
++	u16	bit_width;
++	u16	num_channels;
++	u16	data_format;
++	u16	timing_mode;
++	u32	sample_rate;
++} __packed;
++
+ union afe_port_config {
++	struct afe_param_id_pseudo_port_cfg pseudo_cfg;
+ 	struct afe_param_id_hdmi_multi_chan_audio_cfg hdmi_multi_ch;
+ 	struct afe_param_id_slimbus_cfg           slim_cfg;
+ 	struct afe_param_id_i2s_cfg	i2s_cfg;
+@@ -579,6 +596,10 @@
+ 
+ static struct afe_port_map port_maps[AFE_PORT_MAX] = {
+ 	[HDMI_RX] = { AFE_PORT_ID_MULTICHAN_HDMI_RX, HDMI_RX, 1, 1},
++	/* Direction as the DSP sees the data: record ports deliver to the host */
++	[VOICE_RECORD_RX] = { AFE_PORT_ID_VOICE_RECORD_RX, VOICE_RECORD_RX, 0, 1},
++	[VOICE_RECORD_TX] = { AFE_PORT_ID_VOICE_RECORD_TX, VOICE_RECORD_TX, 0, 1},
++	[VOICE_PLAYBACK_TX] = { AFE_PORT_ID_VOICE_PLAYBACK_TX, VOICE_PLAYBACK_TX, 1, 1},
+ 	[SLIMBUS_0_RX] = { AFE_PORT_ID_SLIMBUS_MULTI_CHAN_0_RX,
+ 				SLIMBUS_0_RX, 1, 1},
+ 	[SLIMBUS_1_RX] = { AFE_PORT_ID_SLIMBUS_MULTI_CHAN_1_RX,
+@@ -1543,6 +1564,31 @@
+ EXPORT_SYMBOL_GPL(q6afe_port_start);
+ 
+ /**
++ * q6afe_pseudo_port_prepare() - Prepare an in-call record/playback pseudo port
++ *
++ * @port: Instance of the afe port
++ * @cfg: Pseudo port configuration
++ *
++ * Mirrors the downstream msm-dai-q6 pseudo port setup: 16 bit linear PCM,
++ * timer driven (real time), at the rate and channel count of the stream.
++ */
++void q6afe_pseudo_port_prepare(struct q6afe_port *port,
++			       struct q6afe_pseudo_cfg *cfg)
++{
++	union afe_port_config *pcfg = &port->port_cfg;
++
++	memset(&pcfg->pseudo_cfg, 0, sizeof(pcfg->pseudo_cfg));
++	pcfg->pseudo_cfg.pseud_port_cfg_minor_version =
++					AFE_API_VERSION_PSEUDO_PORT_CONFIG;
++	pcfg->pseudo_cfg.bit_width = cfg->bit_width;
++	pcfg->pseudo_cfg.num_channels = cfg->num_channels;
++	pcfg->pseudo_cfg.data_format = 0; /* linear PCM */
++	pcfg->pseudo_cfg.timing_mode = AFE_PSEUDOPORT_TIMING_MODE_TIMER;
++	pcfg->pseudo_cfg.sample_rate = cfg->sample_rate;
++}
++EXPORT_SYMBOL_GPL(q6afe_pseudo_port_prepare);
++
++/**
+  * q6afe_port_get_from_id() - Get port instance from a port id
+  *
+  * @dev: Pointer to afe child device.
+@@ -1613,6 +1659,11 @@
+ 	case AFE_PORT_ID_WSA_CODEC_DMA_RX_0 ... AFE_PORT_ID_RX_CODEC_DMA_RX_7:
+ 		cfg_type = AFE_PARAM_ID_CODEC_DMA_CONFIG;
+ 	break;
++	case AFE_PORT_ID_VOICE_RECORD_RX:
++	case AFE_PORT_ID_VOICE_RECORD_TX:
++	case AFE_PORT_ID_VOICE_PLAYBACK_TX:
++		cfg_type = AFE_PARAM_ID_PSEUDO_PORT_CONFIG;
++		break;
+ 	default:
+ 		dev_err(dev, "Invalid port id 0x%x\n", port_id);
+ 		return ERR_PTR(-EINVAL);
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6afe.h src/qdsp6/q6afe.h
+--- a/sound/soc/qcom/qdsp6/q6afe.h	2026-09-29 00:56:25.468537661 +0000
++++ b/sound/soc/qcom/qdsp6/q6afe.h	2026-09-29 00:56:25.506386988 +0000
+@@ -3,7 +3,9 @@
+ #ifndef __Q6AFE_H__
+ #define __Q6AFE_H__
+ 
+-#define AFE_PORT_MAX		129
++#include "q6afe-pseudo-ports.h"
++
++#define AFE_PORT_MAX		139
+ 
+ #define MSM_AFE_PORT_TYPE_RX 0
+ #define MSM_AFE_PORT_TYPE_TX 1
+@@ -204,7 +206,14 @@
+ };
+ 
+ 
++struct q6afe_pseudo_cfg {
++	u32	sample_rate;
++	u16	num_channels;
++	u16	bit_width;
++};
++
+ struct q6afe_port_config {
++	struct q6afe_pseudo_cfg pseudo;
+ 	struct q6afe_hdmi_cfg hdmi;
+ 	struct q6afe_slim_cfg slim;
+ 	struct q6afe_i2s_cfg i2s_cfg;
+@@ -227,6 +236,8 @@
+ void q6afe_tdm_port_prepare(struct q6afe_port *port, struct q6afe_tdm_cfg *cfg);
+ void q6afe_cdc_dma_port_prepare(struct q6afe_port *port,
+ 				struct q6afe_cdc_dma_cfg *cfg);
++void q6afe_pseudo_port_prepare(struct q6afe_port *port,
++			       struct q6afe_pseudo_cfg *cfg);
+ 
+ int q6afe_port_set_sysclk(struct q6afe_port *port, int clk_id,
+ 			  int clk_src, int clk_root,
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6apm-lpass-dais.c src/qdsp6/q6apm-lpass-dais.c
+--- a/sound/soc/qcom/qdsp6/q6apm-lpass-dais.c	2026-09-29 00:56:25.468600447 +0000
++++ b/sound/soc/qcom/qdsp6/q6apm-lpass-dais.c	2026-09-29 00:58:03.559520306 +0000
+@@ -282,7 +282,7 @@
+ 
+ static int q6apm_lpass_dai_dev_probe(struct platform_device *pdev)
+ {
+-	struct q6dsp_audio_port_dai_driver_config cfg;
++	struct q6dsp_audio_port_dai_driver_config cfg = {};
+ 	struct q6apm_lpass_dai_data *dai_data;
+ 	struct snd_soc_dai_driver *dais;
+ 	struct device *dev = &pdev->dev;
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6cvp.c src/qdsp6/q6cvp.c
+--- a/sound/soc/qcom/qdsp6/q6cvp.c	2026-09-29 00:56:25.468930915 +0000
++++ b/sound/soc/qcom/qdsp6/q6cvp.c	2026-09-29 00:59:00.591385418 +0000
+@@ -94,7 +94,7 @@
+ struct q6voice_session *q6cvp_session_create(enum q6voice_path_type path,
+ 					     u16 tx_port, u16 rx_port)
+ {
+-	struct vss_ivocproc_cmd_create_full_control_session_v2_cmd cmd;
++	struct vss_ivocproc_cmd_create_full_control_session_v2_cmd cmd = {};
+ 
+ 	cmd.hdr.pkt_size = sizeof(cmd);
+ 	cmd.hdr.opcode = VSS_IVOCPROC_CMD_CREATE_FULL_CONTROL_SESSION_V2;
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6cvs.c src/qdsp6/q6cvs.c
+--- a/sound/soc/qcom/qdsp6/q6cvs.c	2026-09-29 00:56:25.468978291 +0000
++++ b/sound/soc/qcom/qdsp6/q6cvs.c	2026-09-29 00:59:00.591646029 +0000
+@@ -8,6 +8,100 @@
+ #include "q6cvs.h"
+ #include "q6voice-common.h"
+ 
++#define VSS_ISTREAM_CMD_CREATE_PASSIVE_CONTROL_SESSION	0x00011140
++
++struct vss_istream_cmd_create_passive_control_session_cmd {
++	struct apr_hdr hdr;
++
++	/* Name of the stream session to attach to, e.g. "default volte voice" */
++	char name[20];
++} __packed;
++
++/*
++ * In-call conversation recording. With the default port the DSP delivers the
++ * Rx (downlink) tap on AFE pseudo port 0x8003 and the Tx (uplink) tap on
++ * 0x8004.
++ */
++#define VSS_IRECORD_CMD_START			0x000112BE
++#define VSS_IRECORD_CMD_STOP			0x00011237
++#define VSS_IRECORD_PORT_ID_DEFAULT		0xFFFF
++#define VSS_IRECORD_TAP_POINT_NONE		0x00010F78
++#define VSS_IRECORD_TAP_POINT_STREAM_END	0x00010F79
++#define VSS_IRECORD_MODE_TX_RX_STEREO		0x00010F7A
++
++struct vss_irecord_cmd_start_cmd {
++	struct apr_hdr hdr;
++	u32 rx_tap_point;
++	u32 tx_tap_point;
++	u16 port_id;
++	u32 mode;
++} __packed;
++
++/* In-call music: audio from AFE pseudo port 0x8005 is mixed into the uplink. */
++#define VSS_IPLAYBACK_CMD_START			0x000112BD
++#define VSS_IPLAYBACK_CMD_STOP			0x00011239
++#define VSS_IPLAYBACK_PORT_ID_DEFAULT		0xFFFF
++
++struct vss_iplayback_cmd_start_cmd {
++	struct apr_hdr hdr;
++	u16 port_id;
++} __packed;
++
++struct q6voice_session *q6cvs_session_create(enum q6voice_path_type path,
++					     const char *name)
++{
++	struct vss_istream_cmd_create_passive_control_session_cmd cmd = {};
++
++	cmd.hdr.pkt_size = sizeof(cmd);
++	cmd.hdr.opcode = VSS_ISTREAM_CMD_CREATE_PASSIVE_CONTROL_SESSION;
++	if (name)
++		strscpy(cmd.name, name, sizeof(cmd.name));
++
++	return q6voice_session_create(Q6VOICE_SERVICE_CVS, path, &cmd.hdr);
++}
++EXPORT_SYMBOL_GPL(q6cvs_session_create);
++
++int q6cvs_record(struct q6voice_session *cvs, bool rx, bool tx)
++{
++	struct vss_irecord_cmd_start_cmd cmd = {};
++
++	if (!rx && !tx) {
++		cmd.hdr.pkt_size = APR_HDR_SIZE;
++		cmd.hdr.opcode = VSS_IRECORD_CMD_STOP;
++		return q6voice_common_send(cvs, &cmd.hdr);
++	}
++
++	cmd.hdr.pkt_size = sizeof(cmd);
++	cmd.hdr.opcode = VSS_IRECORD_CMD_START;
++	cmd.rx_tap_point = rx ? VSS_IRECORD_TAP_POINT_STREAM_END :
++				VSS_IRECORD_TAP_POINT_NONE;
++	cmd.tx_tap_point = tx ? VSS_IRECORD_TAP_POINT_STREAM_END :
++				VSS_IRECORD_TAP_POINT_NONE;
++	cmd.port_id = VSS_IRECORD_PORT_ID_DEFAULT;
++	cmd.mode = VSS_IRECORD_MODE_TX_RX_STEREO; /* ignored with the default port */
++
++	return q6voice_common_send(cvs, &cmd.hdr);
++}
++EXPORT_SYMBOL_GPL(q6cvs_record);
++
++int q6cvs_playback(struct q6voice_session *cvs, bool enable)
++{
++	struct vss_iplayback_cmd_start_cmd cmd = {};
++
++	if (!enable) {
++		cmd.hdr.pkt_size = APR_HDR_SIZE;
++		cmd.hdr.opcode = VSS_IPLAYBACK_CMD_STOP;
++		return q6voice_common_send(cvs, &cmd.hdr);
++	}
++
++	cmd.hdr.pkt_size = sizeof(cmd);
++	cmd.hdr.opcode = VSS_IPLAYBACK_CMD_START;
++	cmd.port_id = VSS_IPLAYBACK_PORT_ID_DEFAULT;
++
++	return q6voice_common_send(cvs, &cmd.hdr);
++}
++EXPORT_SYMBOL_GPL(q6cvs_playback);
++
+ static int q6cvs_probe(struct apr_device *adev)
+ {
+ 	return q6voice_common_probe(adev, Q6VOICE_SERVICE_CVS);
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6cvs.h src/qdsp6/q6cvs.h
+--- a/sound/soc/qcom/qdsp6/q6cvs.h	2026-09-29 00:56:25.468998398 +0000
++++ b/sound/soc/qcom/qdsp6/q6cvs.h	2026-09-29 00:59:00.591505924 +0000
+@@ -6,4 +6,9 @@
+ 
+ struct q6voice_session;
+ 
++struct q6voice_session *q6cvs_session_create(enum q6voice_path_type path,
++					     const char *name);
++int q6cvs_record(struct q6voice_session *cvs, bool rx, bool tx);
++int q6cvs_playback(struct q6voice_session *cvs, bool enable);
++
+ #endif /*_Q6_CVS_H */
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6dsp-lpass-ports.c src/qdsp6/q6dsp-lpass-ports.c
+--- a/sound/soc/qcom/qdsp6/q6dsp-lpass-ports.c	2026-09-29 00:56:25.469141202 +0000
++++ b/sound/soc/qcom/qdsp6/q6dsp-lpass-ports.c	2026-09-29 00:56:25.507233340 +0000
+@@ -6,6 +6,7 @@
+ #include <sound/pcm_params.h>
+ #include <dt-bindings/sound/qcom,q6afe.h>
+ #include "q6dsp-lpass-ports.h"
++#include "q6afe-pseudo-ports.h"
+ 
+ #define Q6AFE_TDM_PB_DAI(pre, num, did) {				\
+ 		.playback = {						\
+@@ -574,6 +575,46 @@
+ 	Q6AFE_CDC_DMA_TX_DAI(TX_CODEC_DMA_TX_5),
+ 	Q6AFE_CDC_DMA_RX_DAI(RX_CODEC_DMA_RX_6),
+ 	Q6AFE_CDC_DMA_RX_DAI(RX_CODEC_DMA_RX_7),
++	{
++		.playback = {
++			.stream_name = "Voice Farend Playback",
++			.rates = SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |
++				 SNDRV_PCM_RATE_48000,
++			.formats = SNDRV_PCM_FMTBIT_S16_LE,
++			.channels_min = 1,
++			.channels_max = 2,
++			.rate_min = 8000,
++			.rate_max = 48000,
++		},
++		.id = VOICE_PLAYBACK_TX,
++		.name = "VOICE_PLAYBACK_TX",
++	}, {
++		.capture = {
++			.stream_name = "Voice Downlink Capture",
++			.rates = SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |
++				 SNDRV_PCM_RATE_48000,
++			.formats = SNDRV_PCM_FMTBIT_S16_LE,
++			.channels_min = 1,
++			.channels_max = 2,
++			.rate_min = 8000,
++			.rate_max = 48000,
++		},
++		.id = VOICE_RECORD_RX,
++		.name = "VOICE_RECORD_RX",
++	}, {
++		.capture = {
++			.stream_name = "Voice Uplink Capture",
++			.rates = SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |
++				 SNDRV_PCM_RATE_48000,
++			.formats = SNDRV_PCM_FMTBIT_S16_LE,
++			.channels_min = 1,
++			.channels_max = 2,
++			.rate_min = 8000,
++			.rate_max = 48000,
++		},
++		.id = VOICE_RECORD_TX,
++		.name = "VOICE_RECORD_TX",
++	},
+ };
+ 
+ int q6dsp_audio_ports_of_xlate_dai_name(struct snd_soc_component *component,
+@@ -624,6 +665,9 @@
+ 		case WSA_CODEC_DMA_RX_0 ... RX_CODEC_DMA_RX_7:
+ 			q6dsp_audio_fe_dais[i].ops = cfg->q6dma_ops;
+ 			break;
++		case VOICE_RECORD_RX ... VOICE_PLAYBACK_TX:
++			q6dsp_audio_fe_dais[i].ops = cfg->q6pseudo_ops;
++			break;
+ 		default:
+ 			break;
+ 		}
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6dsp-lpass-ports.h src/qdsp6/q6dsp-lpass-ports.h
+--- a/sound/soc/qcom/qdsp6/q6dsp-lpass-ports.h	2026-09-29 00:56:25.469171258 +0000
++++ b/sound/soc/qcom/qdsp6/q6dsp-lpass-ports.h	2026-09-29 00:56:25.507086222 +0000
+@@ -11,6 +11,7 @@
+ 	const struct snd_soc_dai_ops *q6i2s_ops;
+ 	const struct snd_soc_dai_ops *q6tdm_ops;
+ 	const struct snd_soc_dai_ops *q6dma_ops;
++	const struct snd_soc_dai_ops *q6pseudo_ops;
+ };
+ 
+ struct snd_soc_dai_driver *q6dsp_audio_ports_set_config(struct device *dev,
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6mvm.c src/qdsp6/q6mvm.c
+--- a/sound/soc/qcom/qdsp6/q6mvm.c	2026-09-29 00:56:25.469265808 +0000
++++ b/sound/soc/qcom/qdsp6/q6mvm.c	2026-09-29 00:59:00.591250378 +0000
+@@ -46,16 +46,6 @@
+ #define VSS_IMVM_CMD_START_VOICE			0x00011190
+ #define VSS_IMVM_CMD_STOP_VOICE				0x00011192
+ 
+-static inline const char *q6mvm_session_name(enum q6voice_path_type path)
+-{
+-	switch (path) {
+-	case Q6VOICE_PATH_VOICE:
+-		return "default modem voice";
+-	default:
+-		return NULL;
+-	}
+-}
+-
+ static int q6mvm_set_dual_control(struct q6voice_session *mvm)
+ {
+ 	struct vss_imvm_cmd_set_policy_dual_control_cmd cmd;
+@@ -68,19 +58,18 @@
+ 	return q6voice_common_send(mvm, &cmd.hdr);
+ }
+ 
+-struct q6voice_session *q6mvm_session_create(enum q6voice_path_type path)
++struct q6voice_session *q6mvm_session_create(enum q6voice_path_type path,
++					     const char *name)
+ {
+-	struct vss_imvm_cmd_create_control_session_cmd cmd;
++	struct vss_imvm_cmd_create_control_session_cmd cmd = {};
+ 	struct q6voice_session *mvm;
+-	const char *session_name;
+ 	int ret;
+ 
+ 	cmd.hdr.pkt_size = sizeof(cmd);
+ 	cmd.hdr.opcode = VSS_IMVM_CMD_CREATE_PASSIVE_CONTROL_SESSION;
+ 
+-	session_name = q6mvm_session_name(path);
+-	if (session_name)
+-		strscpy(cmd.name, session_name, sizeof(cmd.name));
++	if (name)
++		strscpy(cmd.name, name, sizeof(cmd.name));
+ 
+ 	mvm = q6voice_session_create(Q6VOICE_SERVICE_MVM, path, &cmd.hdr);
+ 	if (IS_ERR(mvm))
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6mvm.h src/qdsp6/q6mvm.h
+--- a/sound/soc/qcom/qdsp6/q6mvm.h	2026-09-29 00:56:25.469287543 +0000
++++ b/sound/soc/qcom/qdsp6/q6mvm.h	2026-09-29 00:59:00.591009496 +0000
+@@ -6,7 +6,8 @@
+ 
+ struct q6voice_session;
+ 
+-struct q6voice_session *q6mvm_session_create(enum q6voice_path_type path);
++struct q6voice_session *q6mvm_session_create(enum q6voice_path_type path,
++					     const char *name);
+ 
+ int q6mvm_attach(struct q6voice_session *mvm, struct q6voice_session *cvp,
+ 		 bool state);
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6routing.c src/qdsp6/q6routing.c
+--- a/sound/soc/qcom/qdsp6/q6routing.c	2026-09-29 00:56:25.469378148 +0000
++++ b/sound/soc/qcom/qdsp6/q6routing.c	2026-09-29 00:58:03.559948459 +0000
+@@ -64,6 +64,8 @@
+ 	{ s, NULL, mix_name }
+ 
+ #define Q6ROUTING_TX_DAPM_ROUTE(mix_name)		\
++	{ mix_name, "VOICE_RECORD_RX", "VOICE_RECORD_RX" },	\
++	{ mix_name, "VOICE_RECORD_TX", "VOICE_RECORD_TX" },	\
+ 	{ mix_name, "PRI_MI2S_TX", "PRI_MI2S_TX" },	\
+ 	{ mix_name, "SEC_MI2S_TX", "SEC_MI2S_TX" },	\
+ 	{ mix_name, "QUAT_MI2S_TX", "QUAT_MI2S_TX" },	\
+@@ -130,6 +132,12 @@
+ 	{ mix_name, "TX_CODEC_DMA_TX_5", "TX_CODEC_DMA_TX_5"}
+ 
+ #define Q6ROUTING_TX_MIXERS(id)						\
++	SOC_SINGLE_EXT("VOICE_RECORD_RX", VOICE_RECORD_RX,		\
++		id, 1, 0, msm_routing_get_audio_mixer,			\
++		msm_routing_put_audio_mixer),				\
++	SOC_SINGLE_EXT("VOICE_RECORD_TX", VOICE_RECORD_TX,		\
++		id, 1, 0, msm_routing_get_audio_mixer,			\
++		msm_routing_put_audio_mixer),				\
+ 	SOC_SINGLE_EXT("PRI_MI2S_TX", PRIMARY_MI2S_TX,			\
+ 		id, 1, 0, msm_routing_get_audio_mixer,			\
+ 		msm_routing_put_audio_mixer),				\
+@@ -521,6 +529,9 @@
+ static const struct snd_kcontrol_new display_port_mixer_controls[] = {
+ 	Q6ROUTING_RX_MIXERS(DISPLAY_PORT_RX) };
+ 
++static const struct snd_kcontrol_new voice_playback_tx_mixer_controls[] = {
++	Q6ROUTING_RX_MIXERS(VOICE_PLAYBACK_TX) };
++
+ static const struct snd_kcontrol_new primary_mi2s_rx_mixer_controls[] = {
+ 	Q6ROUTING_RX_MIXERS(PRIMARY_MI2S_RX) };
+ 
+@@ -763,6 +774,9 @@
+ 	SND_SOC_DAPM_MIXER("SLIMBUS_6_RX Audio Mixer", SND_SOC_NOPM, 0, 0,
+ 			   slimbus_6_rx_mixer_controls,
+ 			   ARRAY_SIZE(slimbus_6_rx_mixer_controls)),
++	SND_SOC_DAPM_MIXER("VOICE_PLAYBACK_TX Audio Mixer", SND_SOC_NOPM, 0, 0,
++			   voice_playback_tx_mixer_controls,
++			   ARRAY_SIZE(voice_playback_tx_mixer_controls)),
+ 	SND_SOC_DAPM_MIXER("PRI_MI2S_RX Audio Mixer", SND_SOC_NOPM, 0, 0,
+ 			   primary_mi2s_rx_mixer_controls,
+ 			   ARRAY_SIZE(primary_mi2s_rx_mixer_controls)),
+@@ -967,6 +981,7 @@
+ 	Q6ROUTING_RX_DAPM_ROUTE("QUIN_MI2S_RX Audio Mixer", "QUIN_MI2S_RX"),
+ 	Q6ROUTING_RX_DAPM_ROUTE("TERT_MI2S_RX Audio Mixer", "TERT_MI2S_RX"),
+ 	Q6ROUTING_RX_DAPM_ROUTE("SEC_MI2S_RX Audio Mixer", "SEC_MI2S_RX"),
++	Q6ROUTING_RX_DAPM_ROUTE("VOICE_PLAYBACK_TX Audio Mixer", "VOICE_PLAYBACK_TX"),
+ 	Q6ROUTING_RX_DAPM_ROUTE("PRI_MI2S_RX Audio Mixer", "PRI_MI2S_RX"),
+ 	Q6ROUTING_RX_DAPM_ROUTE("PRIMARY_TDM_RX_0 Audio Mixer",
+ 				"PRIMARY_TDM_RX_0"),
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6voice-dai.c src/qdsp6/q6voice-dai.c
+--- a/sound/soc/qcom/qdsp6/q6voice-dai.c	2026-09-29 00:56:25.469483170 +0000
++++ b/sound/soc/qcom/qdsp6/q6voice-dai.c	2026-09-29 01:00:23.993024900 +0000
+@@ -148,6 +148,102 @@
+ 		       q6voice_get_mixer, q6voice_put_mixer)
+ };
+ 
++/*
++ * In-call audio for hosts without a codec on the voice path (NasSimHub UFI003).
++ *
++ *   "Voice Session VoLTE"    attach to the VoLTE rather than the CS session
++ *   "Voice Record Downlink"  deliver the far end on VOICE_RECORD_RX (0x8003)
++ *   "Voice Record Uplink"    deliver the near end on VOICE_RECORD_TX (0x8004)
++ *   "Voice Playback Uplink"  mix VOICE_PLAYBACK_TX (0x8005) into the uplink
++ *
++ * The record/playback switches may be set before or during a call; they are
++ * applied whenever the CS-VOICE path is running.
++ */
++enum {
++	Q6VOICE_CTL_VOLTE,
++	Q6VOICE_CTL_REC_RX,
++	Q6VOICE_CTL_REC_TX,
++	Q6VOICE_CTL_PLAYBACK,
++};
++
++static int q6voice_get_tap(struct snd_kcontrol *kcontrol,
++			   struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_component *c = snd_soc_kcontrol_component(kcontrol);
++	struct soc_mixer_control *mc =
++		(struct soc_mixer_control *)kcontrol->private_value;
++	struct q6voice *v = snd_soc_component_get_drvdata(c);
++	bool rx, tx;
++
++	switch (mc->shift) {
++	case Q6VOICE_CTL_VOLTE:
++		ucontrol->value.integer.value[0] = q6voice_get_volte(v);
++		break;
++	case Q6VOICE_CTL_REC_RX:
++	case Q6VOICE_CTL_REC_TX:
++		q6voice_get_record(v, Q6VOICE_PATH_VOICE, &rx, &tx);
++		ucontrol->value.integer.value[0] =
++			mc->shift == Q6VOICE_CTL_REC_RX ? rx : tx;
++		break;
++	case Q6VOICE_CTL_PLAYBACK:
++		ucontrol->value.integer.value[0] =
++			q6voice_get_playback(v, Q6VOICE_PATH_VOICE);
++		break;
++	default:
++		return -EINVAL;
++	}
++	return 0;
++}
++
++static int q6voice_put_tap(struct snd_kcontrol *kcontrol,
++			   struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_component *c = snd_soc_kcontrol_component(kcontrol);
++	struct soc_mixer_control *mc =
++		(struct soc_mixer_control *)kcontrol->private_value;
++	struct q6voice *v = snd_soc_component_get_drvdata(c);
++	bool val = !!ucontrol->value.integer.value[0];
++	bool rx, tx, old;
++	int ret = 0;
++
++	switch (mc->shift) {
++	case Q6VOICE_CTL_VOLTE:
++		old = q6voice_get_volte(v);
++		q6voice_set_volte(v, val);
++		return old != val;
++	case Q6VOICE_CTL_REC_RX:
++	case Q6VOICE_CTL_REC_TX:
++		q6voice_get_record(v, Q6VOICE_PATH_VOICE, &rx, &tx);
++		old = mc->shift == Q6VOICE_CTL_REC_RX ? rx : tx;
++		if (mc->shift == Q6VOICE_CTL_REC_RX)
++			rx = val;
++		else
++			tx = val;
++		ret = q6voice_set_record(v, Q6VOICE_PATH_VOICE, rx, tx);
++		break;
++	case Q6VOICE_CTL_PLAYBACK:
++		old = q6voice_get_playback(v, Q6VOICE_PATH_VOICE);
++		ret = q6voice_set_playback(v, Q6VOICE_PATH_VOICE, val);
++		break;
++	default:
++		return -EINVAL;
++	}
++	if (ret)
++		return ret;
++	return old != val;
++}
++
++static const struct snd_kcontrol_new q6voice_tap_controls[] = {
++	SOC_SINGLE_EXT("Voice Session VoLTE", SND_SOC_NOPM, Q6VOICE_CTL_VOLTE,
++		       1, 0, q6voice_get_tap, q6voice_put_tap),
++	SOC_SINGLE_EXT("Voice Record Downlink", SND_SOC_NOPM, Q6VOICE_CTL_REC_RX,
++		       1, 0, q6voice_get_tap, q6voice_put_tap),
++	SOC_SINGLE_EXT("Voice Record Uplink", SND_SOC_NOPM, Q6VOICE_CTL_REC_TX,
++		       1, 0, q6voice_get_tap, q6voice_put_tap),
++	SOC_SINGLE_EXT("Voice Playback Uplink", SND_SOC_NOPM, Q6VOICE_CTL_PLAYBACK,
++		       1, 0, q6voice_get_tap, q6voice_put_tap),
++};
++
+ static const struct snd_soc_dapm_widget q6voice_dapm_widgets[] = {
+ 	SND_SOC_DAPM_AIF_IN("CS-VOICE_DL1", "CS-VOICE Playback", 0, SND_SOC_NOPM, 0, 0),
+ 	SND_SOC_DAPM_AIF_OUT("CS-VOICE_UL1", "CS-VOICE Capture", 0, SND_SOC_NOPM, 0, 0),
+@@ -209,6 +305,8 @@
+ 	.name = DRV_NAME,
+ 	.open = q6voice_dai_open,
+ 
++	.controls = q6voice_tap_controls,
++	.num_controls = ARRAY_SIZE(q6voice_tap_controls),
+ 	.dapm_widgets = q6voice_dapm_widgets,
+ 	.num_dapm_widgets = ARRAY_SIZE(q6voice_dapm_widgets),
+ 	.dapm_routes = q6voice_dapm_routes,
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6voice.c src/qdsp6/q6voice.c
+--- a/sound/soc/qcom/qdsp6/q6voice.c	2026-09-29 00:56:25.469506495 +0000
++++ b/sound/soc/qcom/qdsp6/q6voice.c	2026-09-29 01:00:23.992792635 +0000
+@@ -16,6 +16,8 @@
+ struct q6voice_path_runtime {
+ 	struct q6voice_session *sessions[Q6VOICE_SERVICE_COUNT];
+ 	unsigned int started;
++	/* What the DSP was last told for this call */
++	bool rec_rx, rec_tx, playback;
+ };
+ 
+ struct q6voice_path {
+@@ -23,6 +25,8 @@
+ 
+ 	enum q6voice_path_type type;
+ 	int tx_port, rx_port;
++	/* Requested in-call record/playback, applied whenever the call runs */
++	bool want_rec_rx, want_rec_tx, want_playback;
+ 	/* Serialize access to voice path session */
+ 	struct mutex lock;
+ 	struct q6voice_path_runtime *runtime;
+@@ -30,9 +34,87 @@
+ 
+ struct q6voice {
+ 	struct device *dev;
++	bool volte;
+ 	struct q6voice_path paths[Q6VOICE_PATH_COUNT];
+ };
+ 
++static const char *q6voice_session_name(struct q6voice_path *p)
++{
++	return p->v->volte ? "default volte voice" : "default modem voice";
++}
++
++/* Bring the DSP record/playback state in line with what userspace asked for. */
++static int q6voice_path_apply_taps(struct q6voice_path *p)
++{
++	struct q6voice_path_runtime *rt = p->runtime;
++	struct q6voice_session *cvs;
++	int ret, err = 0;
++
++	if (!rt || rt->started != 3)
++		return 0;
++
++	cvs = rt->sessions[Q6VOICE_SERVICE_CVS];
++	if (!cvs) {
++		if (!p->want_rec_rx && !p->want_rec_tx && !p->want_playback)
++			return 0;
++		cvs = q6cvs_session_create(p->type, q6voice_session_name(p));
++		if (IS_ERR(cvs)) {
++			dev_err(p->v->dev, "failed to attach to voice stream: %ld\n",
++				PTR_ERR(cvs));
++			return PTR_ERR(cvs);
++		}
++		rt->sessions[Q6VOICE_SERVICE_CVS] = cvs;
++	}
++
++	if (p->want_rec_rx != rt->rec_rx || p->want_rec_tx != rt->rec_tx) {
++		/* The DSP takes one record configuration at a time. */
++		if (rt->rec_rx || rt->rec_tx) {
++			ret = q6cvs_record(cvs, false, false);
++			if (ret)
++				dev_warn(p->v->dev, "failed to stop record: %d\n", ret);
++			rt->rec_rx = rt->rec_tx = false;
++		}
++		if (p->want_rec_rx || p->want_rec_tx) {
++			ret = q6cvs_record(cvs, p->want_rec_rx, p->want_rec_tx);
++			if (ret) {
++				dev_err(p->v->dev, "failed to start record: %d\n", ret);
++				err = ret;
++			} else {
++				rt->rec_rx = p->want_rec_rx;
++				rt->rec_tx = p->want_rec_tx;
++			}
++		}
++	}
++
++	if (p->want_playback != rt->playback) {
++		ret = q6cvs_playback(cvs, p->want_playback);
++		if (ret) {
++			dev_err(p->v->dev, "failed to %s uplink playback: %d\n",
++				p->want_playback ? "start" : "stop", ret);
++			err = ret;
++		} else {
++			rt->playback = p->want_playback;
++		}
++	}
++
++	return err;
++}
++
++/* Stop record/playback in the DSP before the call path goes away. */
++static void q6voice_path_stop_taps(struct q6voice_path *p)
++{
++	struct q6voice_path_runtime *rt = p->runtime;
++	struct q6voice_session *cvs = rt->sessions[Q6VOICE_SERVICE_CVS];
++
++	if (!cvs)
++		return;
++	if (rt->playback && q6cvs_playback(cvs, false))
++		dev_warn(p->v->dev, "failed to stop uplink playback\n");
++	if ((rt->rec_rx || rt->rec_tx) && q6cvs_record(cvs, false, false))
++		dev_warn(p->v->dev, "failed to stop record\n");
++	rt->playback = rt->rec_rx = rt->rec_tx = false;
++}
++
+ static int q6voice_path_start(struct q6voice_path *p)
+ {
+ 	struct device *dev = p->v->dev;
+@@ -43,7 +125,7 @@
+ 
+ 	mvm = p->runtime->sessions[Q6VOICE_SERVICE_MVM];
+ 	if (!mvm) {
+-		mvm = q6mvm_session_create(p->type);
++		mvm = q6mvm_session_create(p->type, q6voice_session_name(p));
+ 		if (IS_ERR(mvm))
+ 			return PTR_ERR(mvm);
+ 		p->runtime->sessions[Q6VOICE_SERVICE_MVM] = mvm;
+@@ -95,7 +177,7 @@
+ 
+ 	mutex_lock(&p->lock);
+ 	if (!p->runtime) {
+-		p->runtime = kzalloc(sizeof(*p), GFP_KERNEL);
++		p->runtime = kzalloc(sizeof(*p->runtime), GFP_KERNEL);
+ 		if (!p->runtime) {
+ 			ret = -ENOMEM;
+ 			goto out;
+@@ -120,6 +202,9 @@
+ 		goto out;
+ 	}
+ 
++	/* A failure here leaves the call up; the controls report it. */
++	q6voice_path_apply_taps(p);
++
+ out:
+ 	mutex_unlock(&p->lock);
+ 	return ret;
+@@ -135,6 +220,8 @@
+ 
+ 	dev_dbg(dev, "stop path %d\n", p->type);
+ 
++	q6voice_path_stop_taps(p);
++
+ 	ret = q6mvm_start(mvm, false);
+ 	if (ret)
+ 		dev_err(dev, "failed to stop voice: %d\n", ret);
+@@ -260,6 +347,71 @@
+ }
+ EXPORT_SYMBOL_GPL(q6voice_set_port);
+ 
++void q6voice_set_volte(struct q6voice *v, bool volte)
++{
++	v->volte = volte;
++}
++EXPORT_SYMBOL_GPL(q6voice_set_volte);
++
++bool q6voice_get_volte(struct q6voice *v)
++{
++	return v->volte;
++}
++EXPORT_SYMBOL_GPL(q6voice_get_volte);
++
++int q6voice_set_record(struct q6voice *v, enum q6voice_path_type path,
++		       bool rx, bool tx)
++{
++	struct q6voice_path *p = &v->paths[path];
++	int ret;
++
++	mutex_lock(&p->lock);
++	p->want_rec_rx = rx;
++	p->want_rec_tx = tx;
++	ret = q6voice_path_apply_taps(p);
++	mutex_unlock(&p->lock);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(q6voice_set_record);
++
++void q6voice_get_record(struct q6voice *v, enum q6voice_path_type path,
++			bool *rx, bool *tx)
++{
++	struct q6voice_path *p = &v->paths[path];
++
++	mutex_lock(&p->lock);
++	*rx = p->want_rec_rx;
++	*tx = p->want_rec_tx;
++	mutex_unlock(&p->lock);
++}
++EXPORT_SYMBOL_GPL(q6voice_get_record);
++
++int q6voice_set_playback(struct q6voice *v, enum q6voice_path_type path,
++			 bool enable)
++{
++	struct q6voice_path *p = &v->paths[path];
++	int ret;
++
++	mutex_lock(&p->lock);
++	p->want_playback = enable;
++	ret = q6voice_path_apply_taps(p);
++	mutex_unlock(&p->lock);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(q6voice_set_playback);
++
++bool q6voice_get_playback(struct q6voice *v, enum q6voice_path_type path)
++{
++	struct q6voice_path *p = &v->paths[path];
++	bool enable;
++
++	mutex_lock(&p->lock);
++	enable = p->want_playback;
++	mutex_unlock(&p->lock);
++	return enable;
++}
++EXPORT_SYMBOL_GPL(q6voice_get_playback);
++
+ MODULE_AUTHOR("Stephan Gerhold <stephan@gerhold.net>");
+ MODULE_DESCRIPTION("Q6Voice driver");
+ MODULE_LICENSE("GPL v2");
+diff -ruN -x '*.o' -x '*.ko' orig/qdsp6/q6voice.h src/qdsp6/q6voice.h
+--- a/sound/soc/qcom/qdsp6/q6voice.h	2026-09-29 00:56:25.469530315 +0000
++++ b/sound/soc/qcom/qdsp6/q6voice.h	2026-09-29 00:59:55.762686541 +0000
+@@ -25,4 +25,21 @@
+ void q6voice_set_port(struct q6voice *v, enum q6voice_path_type path,
+ 		      bool capture, int index);
+ 
++/*
++ * Which modem voice session the path attaches to. VoLTE calls run in the
++ * "default volte voice" session, circuit-switched calls in "default modem
++ * voice". Takes effect the next time the path starts.
++ */
++void q6voice_set_volte(struct q6voice *v, bool volte);
++bool q6voice_get_volte(struct q6voice *v);
++
++/* In-call record taps and uplink playback ("incall music"). */
++int q6voice_set_record(struct q6voice *v, enum q6voice_path_type path,
++		       bool rx, bool tx);
++void q6voice_get_record(struct q6voice *v, enum q6voice_path_type path,
++			bool *rx, bool *tx);
++int q6voice_set_playback(struct q6voice *v, enum q6voice_path_type path,
++			 bool enable);
++bool q6voice_get_playback(struct q6voice *v, enum q6voice_path_type path);
++
+ #endif /*_Q6_VOICE_H */

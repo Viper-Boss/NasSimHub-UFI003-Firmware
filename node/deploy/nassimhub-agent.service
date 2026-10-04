@@ -1,0 +1,97 @@
+[Unit]
+Description=NasSimHub Node agent
+Documentation=https://github.com/human-agent65535/nassimhub-node
+# The agent does not need the network to be "up" - it serves on whatever
+# interfaces exist and copes with them appearing and disappearing, because on
+# this hardware they do. Waiting for network-online.target would only delay
+# start-up on a device whose Wi-Fi has not been configured yet, which is exactly
+# the device that most needs its provisioning access point running.
+After=network.target
+Wants=network.target
+
+# Restart rate limit. If the agent has failed five times in two minutes it is
+# failing for a reason a restart will not fix - a corrupt state directory, a
+# full disk, an unreadable configuration - and hammering it turns a broken
+# service into a broken service that also fills the log and wears the flash.
+# Stopping leaves the evidence intact for whoever looks next.
+#
+# These two keys live in [Unit], not [Service]: systemd moved them in v229 and
+# silently ignores them in the wrong section, which would leave the limit
+# looking configured and not applied.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/nassimhub-agent -config /etc/nassimhub/agent.conf
+# Validate the configuration before the service is considered started, so a
+# typo in the file is reported by `systemctl start` rather than discovered later.
+ExecStartPre=/usr/bin/nassimhub-agent -config /etc/nassimhub/agent.conf -check-config
+
+# Restart policy.
+#
+# always, not on-failure: a clean exit from this process is still a device that
+# has stopped answering its NAS, and there is no exit code that means "stay
+# stopped". An operator who wants it stopped uses systemctl.
+Restart=always
+RestartSec=5
+# Graceful shutdown. The agent closes its listeners, finishes in-flight
+# requests and flushes its log on SIGTERM; 20 seconds is far more than that
+# needs and well short of anything a user would notice.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# State. RuntimeDirectory/StateDirectory/LogsDirectory make systemd create these
+# with the right ownership, so a first boot does not need a postinst to do it.
+User=nassimhub
+Group=nassimhub
+StateDirectory=nassimhub
+StateDirectoryMode=0700
+LogsDirectory=nassimhub
+ConfigurationDirectory=nassimhub
+
+# Hardening.
+#
+# The agent reads its configuration, writes its state and log directories, opens
+# sockets, and on real hardware will talk to a modem device node. It needs
+# nothing else, and this is the list of things it is therefore denied. Each line
+# here is one class of mistake that cannot become a compromise.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# PrivateDevices=yes hides /dev/cdc-wdm* and the sound devices. The hardware
+# stage will need them; when it does, the change is to add exactly the device
+# nodes required here rather than to remove the line:
+#     PrivateDevices=no
+#     DeviceAllow=/dev/cdc-wdm0 rw
+#     DeviceAllow=char-alsa rw
+
+# A small device with a small budget. These are generous for an agent whose
+# idle resident set is under 10 MB, and they turn a runaway into a restart
+# rather than into a NAS-less household.
+MemoryMax=96M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

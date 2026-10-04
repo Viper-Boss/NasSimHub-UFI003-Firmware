@@ -1,0 +1,13 @@
+[connection]
+id=nassimhub-usb
+type=ethernet
+interface-name=usb0
+autoconnect=true
+[ethernet]
+[ipv4]
+method=manual
+address1=10.55.0.2/29
+never-default=true
+may-fail=false
+[ipv6]
+method=disabled

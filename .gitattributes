@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+# Unified patches contain leading context spaces before kernel tabs by design.
+*.patch -whitespace

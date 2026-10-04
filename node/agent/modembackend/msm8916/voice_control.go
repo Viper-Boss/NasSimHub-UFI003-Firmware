@@ -37,7 +37,7 @@ func (b *Backend) dialVoice(ctx context.Context, request proto.DialRequest) (pro
 	}
 	b.voiceMu.Lock()
 	defer b.voiceMu.Unlock()
-	calls, err := b.listReadOnlyCalls(ctx)
+	calls, err := b.ListCalls(ctx)
 	if err != nil {
 		return proto.CallReceipt{}, err
 	}
@@ -92,7 +92,10 @@ func (b *Backend) commandVoice(ctx context.Context, operation, id, flag string, 
 	}
 	b.voiceMu.Lock()
 	defer b.voiceMu.Unlock()
-	calls, err := b.listReadOnlyCalls(ctx)
+	if b.options.Run == nil && b.options.RunBusctl == nil {
+		return b.commandVoiceDBus(ctx, operation, id, path, incomingOnly)
+	}
+	calls, err := b.ListCalls(ctx)
 	if err != nil {
 		return proto.CallReceipt{}, err
 	}

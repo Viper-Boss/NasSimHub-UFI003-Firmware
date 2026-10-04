@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/human-agent65535/nassimhub-node/proto"
+	"github.com/human-agent65535/nassimhub-node/proto/mmclitext"
 )
 
 const smsPathPrefix = "/org/freedesktop/ModemManager1/SMS/"
@@ -92,7 +93,7 @@ func smsFromProperties(path, simID string, fields map[string]string) (proto.SMS,
 		ID:    "mm-" + strings.TrimPrefix(path, smsPathPrefix),
 		SIMID: simID,
 		Peer:  printableValue(fields["sms.content.number"]),
-		Text:  printableValue(fields["sms.content.text"]),
+		Text:  smsText(fields["sms.content.text"]),
 	}
 	switch pduType {
 	case "deliver":
@@ -123,4 +124,14 @@ func smsFromProperties(path, simID string, fields map[string]string) (proto.SMS,
 		}
 	}
 	return message, true
+}
+
+// SMS text in mmcli -K is GLib-escaped UTF-8, not literal user content.
+func smsText(raw string) string {
+	value := printableValue(raw)
+	decoded, ok := mmclitext.Decode(value)
+	if !ok {
+		return value
+	}
+	return decoded
 }

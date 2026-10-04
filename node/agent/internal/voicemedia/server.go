@@ -58,6 +58,8 @@ func Serve(ctx context.Context, conn net.Conn, buffered *bufio.Reader, callID st
 	}
 	captureDone := make(chan error, 1)
 	go func() {
+		var captureStats mediaStats
+		defer captureStats.report(callID, "downlink")
 		var sequence uint32
 		for {
 			frame := make([]byte, FrameBytes)
@@ -75,9 +77,14 @@ func Serve(ctx context.Context, conn net.Conn, buffered *bufio.Reader, callID st
 				stop()
 				return
 			}
+			if captureStats.observe(frame) {
+				captureStats.report(callID, "downlink")
+			}
 			sequence++
 		}
 	}()
+	var playbackStats mediaStats
+	defer playbackStats.report(callID, "uplink")
 	var playbackSequence uint32
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
@@ -104,6 +111,9 @@ func Serve(ctx context.Context, conn net.Conn, buffered *bufio.Reader, callID st
 			}
 			if err := pcm.WritePCM(sessionContext, frame.Payload); err != nil {
 				return err
+			}
+			if playbackStats.observe(frame.Payload) {
+				playbackStats.report(callID, "uplink")
 			}
 			playbackSequence++
 		default:

@@ -28,7 +28,7 @@ func TestOpenerRunsRoutesAndReleasesPCMProcesses(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	pcm, err := opener.Open(ctx, "mm-7")
+	pcm, err := opener.Open(ctx, "mm-0123456789abcdef0123456789abcdef-7")
 	if err != nil {
 		t.Fatal(err)
 	}

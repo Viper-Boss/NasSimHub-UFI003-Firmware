@@ -229,7 +229,12 @@
       var name = document.createElement("span");
       // textContent, never innerHTML: an SSID is attacker-chosen text and the
       // access point it came from is not this device's.
-      name.textContent = network.ssid + (network.security === "open" ? "（开放）" : "");
+      // The support mark says what has been tried on this hardware, not what
+      // will happen: an unverified network may work, and is still listed.
+      var mark = network.support === "unsupported" ? "（不支持）"
+        : network.support === "unverified" ? "（未在本设备上验证）" : "";
+      name.textContent = network.ssid + (network.security === "open" ? "（开放）" : "") + mark;
+      if (network.support_reason) { button.title = network.support_reason; }
       var strength = document.createElement("span");
       strength.className = "bars";
       strength.textContent = bars(network.signal_dbm);
@@ -241,6 +246,13 @@
         $("ssid").value = network.ssid;
         $("psk").disabled = network.security === "open";
         renderNetworks(list);
+        if (network.support === "unsupported") {
+          message("bad", "这类网络本设备无法加入（企业级 802.1X 认证）。");
+        } else if (network.support === "unverified") {
+          message("bad", "这类网络（5 GHz、仅 WPA3 或开放网络等）尚未在本设备硬件上验证，可以尝试，结果以设备实际状态为准。");
+        } else {
+          clearMessage();
+        }
         $("psk").focus();
       });
       item.appendChild(button);
@@ -255,6 +267,9 @@
     button.textContent = "扫描中…";
     api("/provision/scan", "POST", {}).then(function (result) {
       renderNetworks(result && result.networks);
+      if (result && result.from_cache) {
+        message("bad", "热点开启期间无法重新扫描，以下是热点开启前看到的网络；也可以直接输入网络名称。");
+      }
     }).catch(function (error) {
       message("bad", "扫描失败：" + error.message);
     }).then(function () {
@@ -279,6 +294,9 @@
         // send it.
         $("psk").value = "";
         renderStatus(status);
+        // One radio: it cannot stay an access point while it joins. The page
+        // says so before the phone drops off, instead of looking broken.
+        message("ok", "设备正在尝试加入网络，配网热点会随之关闭，本页面会断开。如果加入失败，热点会在一两分钟内重新出现，重新连上热点即可看到失败原因。");
         startPolling();
       })
       .catch(function (error) {

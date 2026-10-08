@@ -62,6 +62,20 @@ type PairRequest struct {
 	CoreID        string `json:"core_id"`
 	CoreName      string `json:"core_name"`
 	CorePublicKey string `json:"core_public_key"`
+	// CorePQ is the Core's ADDITIONAL post-quantum public key, when it has one
+	// (protocol 1.3). The request then also carries HeaderPQSignature over the
+	// same canonical bytes. An older Node ignores the field and the header; an
+	// older Core sends neither. See pqattest.go.
+	CorePQ *PQIdentity `json:"core_pq,omitempty"`
+}
+
+// OfferedPQ returns the post-quantum identity a pair request carries, or an
+// empty one.
+func (r PairRequest) OfferedPQ() PQIdentity {
+	if r.CorePQ == nil {
+		return PQIdentity{}
+	}
+	return *r.CorePQ
 }
 
 // PairResponse confirms ownership and hands back the first session.

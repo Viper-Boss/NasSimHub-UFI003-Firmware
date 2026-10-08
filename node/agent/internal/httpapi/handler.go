@@ -30,6 +30,7 @@ import (
 	"github.com/human-agent65535/nassimhub-node/agent/modembackend"
 	"github.com/human-agent65535/nassimhub-node/agent/netbackend"
 	"github.com/human-agent65535/nassimhub-node/agent/nodetls"
+	"github.com/human-agent65535/nassimhub-node/agent/trust"
 	"github.com/human-agent65535/nassimhub-node/proto"
 )
 
@@ -71,8 +72,26 @@ type Options struct {
 	TransportKeys TransportKeys
 	// PQIdentity reports the device's post-quantum identity, when it has one.
 	PQIdentity func() proto.PQIdentity
+	// PQSigner signs with the device's post-quantum key. It returns nil when
+	// the device holds none, in which case an attestation carries the Ed25519
+	// signature alone and says so.
+	PQSigner func() proto.PQSigner
+	// PQIdentityPolicy is how much post-quantum identity this Node demands of
+	// the Core. It is reported in diagnostics; enforcement lives in the
+	// pairing store.
+	PQIdentityPolicy proto.PQIdentityPolicy
 	// SecurityLevel is the level this Node was configured with.
 	SecurityLevel proto.SecurityLevel
+	// Updates is the agent update service. Nil on a Node that has none, where
+	// the update endpoints answer NotSupported.
+	Updates Updates
+	// Trust is the device-local trust gate. Nil on a Node that does not
+	// enforce a policy: the trust endpoints are then not registered at all
+	// (they answer 404, as an older agent does) and nothing is gated.
+	Trust *trust.Gate
+	// Hardware reports the device's credible hardware identifier, or says why
+	// there is none. Optional; see trust_api.go.
+	Hardware func() proto.HardwareIdentity
 }
 
 type handler struct {
@@ -101,8 +120,20 @@ type handler struct {
 	transportKeys TransportKeys
 	// identityOf reports the device's post-quantum identity, when it has one.
 	identityOf func() proto.PQIdentity
+	// pqSigner signs attestations with the post-quantum key, when there is one.
+	pqSigner func() proto.PQSigner
+	// pqIdentityPolicy is what this Node demands of the Core.
+	pqIdentityPolicy proto.PQIdentityPolicy
 	// securityLevel is what this Node was configured with.
 	securityLevel proto.SecurityLevel
+	// updates is the agent update service, or nil.
+	updates Updates
+	// trust gates outgoing use; nil allows everything. See trust_api.go.
+	trust    *trust.Gate
+	hardware func() proto.HardwareIdentity
+	// routes lists every pattern registered, for the test that proves no
+	// route reaches a dial or send without passing the trust gate.
+	routes []Route
 }
 
 // TransportKeys is the part of the transport key store this handler needs.
@@ -119,6 +150,13 @@ type TransportKeys interface {
 
 // New builds the Node's HTTP handler.
 func New(options Options) http.Handler {
+	handler, _ := NewWithRoutes(options)
+	return handler
+}
+
+// NewWithRoutes builds the handler and also reports every route it
+// registered. The list exists for tests that must walk all of them.
+func NewWithRoutes(options Options) (http.Handler, []Route) {
 	now := options.Now
 	if now == nil {
 		now = time.Now
@@ -143,6 +181,15 @@ func New(options Options) http.Handler {
 		transportKeys: options.TransportKeys,
 		identityOf:    options.PQIdentity,
 		securityLevel: options.SecurityLevel,
+
+		pqSigner:         options.PQSigner,
+		pqIdentityPolicy: options.PQIdentityPolicy,
+		updates:          options.Updates,
+		trust:            options.Trust,
+		hardware:         options.Hardware,
+	}
+	if h.pqIdentityPolicy == "" {
+		h.pqIdentityPolicy = proto.PQIdentityOptional
 	}
 	if h.securityLevel == "" {
 		h.securityLevel = proto.LevelFor(options.PQProfile, options.PQPolicy)
@@ -158,7 +205,7 @@ func New(options Options) http.Handler {
 	// than the handler pretending to stream and delivering nothing.
 	h.events, _ = options.Modem.(modembackend.EventSource)
 
-	mux := http.NewServeMux()
+	mux := &recordingMux{ServeMux: http.NewServeMux(), routes: &h.routes}
 
 	// Unauthenticated. These two exist so an unpaired Node can be discovered
 	// and shown to a user. They carry identity and liveness only - never SIM
@@ -203,6 +250,7 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("POST /v1/calls/dial", h.authenticated(h.postDial))
 	mux.HandleFunc("POST /v1/calls/{id}/answer", h.authenticated(h.postAnswer))
 	mux.HandleFunc("POST /v1/calls/{id}/hangup", h.authenticated(h.postHangup))
+	mux.HandleFunc("POST /v1/calls/{id}/dtmf", h.authenticated(h.postDTMF))
 	mux.HandleFunc("GET /v1/calls/{id}/media", h.authenticated(h.getCallMedia))
 	mux.HandleFunc("GET /v1/wifi", h.authenticated(h.getWiFi))
 	mux.HandleFunc("POST /v1/wifi/scan", h.authenticated(h.postWiFiScan))
@@ -210,15 +258,25 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("POST /v1/wifi/forget", h.authenticated(h.postWiFiForget))
 	mux.HandleFunc("GET /v1/logs", h.authenticated(h.getLogs))
 	mux.HandleFunc("POST "+proto.TransportKeyPath, h.authenticated(h.postTransportKey))
+	mux.HandleFunc("POST "+proto.IdentityAttestPath, h.authenticated(h.postIdentityAttest))
+	// The agent update lifecycle. Authenticated like everything else, and
+	// nothing in it is trusted because the owner sent it: see ota_api.go.
+	mux.HandleFunc("GET "+proto.OTAStatusPath, h.authenticated(h.getOTAStatus))
+	mux.HandleFunc("POST "+proto.OTAManifestPath, h.authenticated(h.postOTAManifest))
+	mux.HandleFunc("PUT "+proto.OTAArtifactPath, h.authenticated(h.putOTAArtifact))
+	mux.HandleFunc("POST "+proto.OTAApplyPath, h.authenticated(h.postOTAApply))
+	mux.HandleFunc("POST "+proto.OTAConfirmPath, h.authenticated(h.postOTAConfirm))
+	mux.HandleFunc("POST "+proto.OTARollbackPath, h.authenticated(h.postOTARollback))
 	// Diagnostics are authenticated like everything else. The bundle carries no
 	// secrets by construction, but "carries no secrets" is not a reason to let
 	// a stranger on the network enumerate the device's state.
 	mux.HandleFunc("GET /v1/diagnostics", h.authenticated(h.getDiagnostics))
 	mux.HandleFunc("GET /v1/diagnostics/archive", h.authenticated(h.getDiagnosticsArchive))
 	mux.HandleFunc("GET /v1/events", h.authenticated(h.getEvents))
+	h.registerTrust(mux)
 
 	if options.LocalAdmin != nil {
-		local := http.NewServeMux()
+		local := &recordingMux{ServeMux: http.NewServeMux(), routes: &h.routes, local: true}
 		local.HandleFunc("GET /v1/node", h.getNode)
 		local.HandleFunc("GET /v1/version", h.getVersion)
 		local.HandleFunc("GET /v1/status", h.getStatus)
@@ -239,8 +297,27 @@ func New(options Options) http.Handler {
 		local.HandleFunc("GET /v1/diagnostics/archive", h.getDiagnosticsArchive)
 		options.LocalAdmin(local)
 	}
-	mux.HandleFunc("/", h.notFound)
-	return mux
+	mux.ServeMux.HandleFunc("/", h.notFound)
+	return mux, h.routes
+}
+
+// Route is one registered pattern. Local is true for the routes handed to the
+// standalone administration console, which authenticates them itself.
+type Route struct {
+	Pattern string
+	Local   bool
+}
+
+// recordingMux registers on a ServeMux and remembers what was registered.
+type recordingMux struct {
+	*http.ServeMux
+	routes *[]Route
+	local  bool
+}
+
+func (m *recordingMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	*m.routes = append(*m.routes, Route{Pattern: pattern, Local: m.local})
+	m.ServeMux.HandleFunc(pattern, handler)
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +376,9 @@ func (h *handler) readSigned(w http.ResponseWriter, r *http.Request) ([]byte, pa
 		Method:    r.Method,
 		Path:      r.URL.Path,
 		Body:      body,
+
+		PQSignature: r.Header.Get(proto.HeaderPQSignature),
+		PQAlgorithm: proto.PQSignatureAlgorithm(r.Header.Get(proto.HeaderPQAlgorithm)),
 	}
 	if signed.CoreID == "" || signed.Signature == "" || signed.Timestamp == "" || signed.Nonce == "" {
 		h.writeAPIError(w, proto.ErrorUnauthenticated, "authenticate", "", "request is not signed")
@@ -423,6 +503,66 @@ func (h *handler) postSession(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusCreated, session)
 }
 
+// postIdentityAttest proves, now, that this device holds its identity keys.
+//
+// The answer is a PairingTranscript naming the device and the Core AS THIS
+// NODE HAS THEM PINNED, bound to the caller's fresh nonce, signed with the
+// Ed25519 identity key and - when the device holds one - the ML-DSA key. Both
+// signatures cover the same bytes.
+//
+// Nothing in the request is copied into the transcript except the nonce. The
+// Core compares the rest against what it believes; a difference is the Core's
+// evidence that the two sides do not hold the same trust, which echoing its
+// own values back would hide.
+//
+// A post-quantum signer that fails is an error, never a quietly classical
+// answer: see proto.SignPairingTranscript.
+func (h *handler) postIdentityAttest(w http.ResponseWriter, r *http.Request) {
+	const operation = "identity_attest"
+	var request proto.IdentityAttestRequest
+	if !h.decode(w, r, operation, &request) {
+		return
+	}
+	if err := proto.ValidateAttestNonce(request.Nonce); err != nil {
+		h.writeAPIError(w, proto.ErrorInvalidArgument, operation, "", err.Error())
+		return
+	}
+	coreID, coreKey, corePQ, paired := h.pairing.Owner()
+	if !paired {
+		h.writeAPIError(w, proto.ErrorFailedPrecondition, operation, "", "node is not paired")
+		return
+	}
+	transcript := proto.PairingTranscript{
+		ProtocolMajor:   proto.ProtocolMajor,
+		DeviceID:        h.identity.DeviceID,
+		DevicePublicKey: proto.EncodeKey(h.identity.PublicKey),
+		DevicePQ:        h.pqIdentity(),
+		CoreID:          coreID,
+		CorePublicKey:   proto.EncodeKey(coreKey),
+		CorePQ:          corePQ,
+		Nonce:           request.Nonce,
+		IssuedAt:        h.now().Unix(),
+	}
+	var signer proto.PQSigner
+	if h.pqSigner != nil && transcript.DevicePQ.Present() {
+		signer = h.pqSigner()
+	}
+	if transcript.DevicePQ.Present() && signer == nil {
+		// A published key that cannot sign would be refused by the Core as a
+		// key advertised without proof. Say what is wrong here instead.
+		h.writeAPIError(w, proto.ErrorInternal, operation, "", "post-quantum identity key is not usable")
+		return
+	}
+	signature, err := proto.SignPairingTranscript(transcript, h.identity.PrivateKey(), signer)
+	if err != nil {
+		h.logs.Errorf("identity", "attestation could not be signed: %v", err)
+		h.writeAPIError(w, proto.ErrorInternal, operation, "", "attestation could not be signed")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	h.writeJSON(w, http.StatusOK, proto.IdentityAttestResponse{Transcript: transcript, Signature: signature})
+}
+
 func (h *handler) deletePair(w http.ResponseWriter, _ *http.Request) {
 	state, err := h.pairing.Unpair()
 	if err != nil {
@@ -517,6 +657,23 @@ func (h *handler) writePairingError(w http.ResponseWriter, operation string, err
 		h.writeAPIError(w, proto.ErrorUnauthenticated, operation, "", "request timestamp is outside the accepted window")
 	case errors.Is(err, pairing.ErrBadSignature):
 		h.writeAPIError(w, proto.ErrorUnauthenticated, operation, "", "request signature is not valid")
+	case errors.Is(err, pairing.ErrPQSignature):
+		// Three different facts, and a Core must be able to tell them apart:
+		// "you must present a post-quantum identity" is something it can fix
+		// by pairing again with its key; a changed, withdrawn or invalid one
+		// is not.
+		switch {
+		case errors.Is(err, proto.ErrPQIdentityChanged):
+			h.writeAPIError(w, proto.ErrorPermissionDenied, operation, "", "post-quantum identity differs from the pinned one")
+		case errors.Is(err, proto.ErrPQIdentityWithdrawn):
+			h.writeAPIError(w, proto.ErrorUnauthenticated, operation, "", "post-quantum signature is required for this core")
+		case errors.Is(err, proto.ErrPQIdentityRequired):
+			h.writeAPIError(w, proto.ErrorFailedPrecondition, operation, "", "post-quantum identity is required by this node's security level")
+		case errors.Is(err, proto.ErrPQAlgorithmTooWeak):
+			h.writeAPIError(w, proto.ErrorPermissionDenied, operation, "", "post-quantum key does not meet this node's security level (ml-dsa-87 is required)")
+		default:
+			h.writeAPIError(w, proto.ErrorUnauthenticated, operation, "", "post-quantum signature is not valid")
+		}
 	default:
 		h.writeAPIError(w, proto.ErrorInternal, operation, "", "pairing failed")
 	}
@@ -571,9 +728,10 @@ func (h *handler) getVersion(w http.ResponseWriter, _ *http.Request) {
 		ProtocolVersion: proto.ProtocolMajor,
 		Platform:        h.identity.Platform,
 		BuildDate:       h.buildDate,
-		// OTA is groundwork only in this stage: the Node reports what it is
-		// running and nothing fetches or applies anything.
-		OTASupported: false,
+		// True only when this device can actually install an update: release
+		// keys present, an installation that can be switched, and a process
+		// that can restart itself.
+		OTASupported: h.updates != nil && h.updates.Status().Supported,
 	})
 }
 
@@ -661,6 +819,11 @@ func (h *handler) stampNodeCalls(calls []proto.Call) {
 }
 
 func (h *handler) postSendSMS(w http.ResponseWriter, r *http.Request) {
+	// First, before the body is read: a refused request must not reach the
+	// backend, where its request id would be recorded for de-duplication.
+	if !h.requireTrust(w, proto.TrustActionSendSMS, "send_sms") {
+		return
+	}
 	var request proto.SendSMSRequest
 	if !h.decode(w, r, "send_sms", &request) {
 		return
@@ -703,6 +866,9 @@ func (h *handler) getCalls(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postDial(w http.ResponseWriter, r *http.Request) {
+	if !h.requireTrust(w, proto.TrustActionDial, "dial") {
+		return
+	}
 	var request proto.DialRequest
 	if !h.decode(w, r, "dial", &request) {
 		return
@@ -722,6 +888,27 @@ func (h *handler) postAnswer(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) postHangup(w http.ResponseWriter, r *http.Request) {
 	h.callCommand(w, r, "hangup", h.modem.Hangup)
+}
+
+func (h *handler) postDTMF(w http.ResponseWriter, r *http.Request) {
+	if !h.requireTrust(w, proto.TrustActionDTMF, "dtmf") {
+		return
+	}
+	sender, ok := h.modem.(modembackend.DTMFSender)
+	if !ok {
+		h.writeError(w, proto.NotSupported("dtmf", "DTMF is not supported on this backend"))
+		return
+	}
+	var request proto.DTMFRequest
+	if !h.decode(w, r, "dtmf", &request) {
+		return
+	}
+	receipt, err := sender.SendDTMF(r.Context(), strings.TrimSpace(r.PathValue("id")), request)
+	if err != nil {
+		h.writeErrorWithRequest(w, err, request.RequestID)
+		return
+	}
+	h.writeJSON(w, http.StatusOK, receipt)
 }
 
 func (h *handler) callCommand(
@@ -995,5 +1182,10 @@ func (h *handler) transportSection(r *http.Request) proto.TransportSection {
 		section = h.transport()
 	}
 	section.Security = h.securityOf(r)
+	// Identity is a separate question from key agreement and is answered
+	// separately: whether this device holds a post-quantum key, whether this
+	// build can verify one, and what it demands of the Core.
+	section.Identity = proto.DescribeIdentity(h.pqIdentity(), h.pqIdentityPolicy)
+	section.Level = h.securityLevel
 	return section
 }

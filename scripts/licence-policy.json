@@ -1,0 +1,12 @@
+{
+  "comment": "Licence policy for Go modules linked into nassimhub-agent, enforced by scripts/sbom.py. 'allowed' lists SPDX identifiers the project accepts for code combined with its AGPL-3.0-only agent; it is a project policy for reviewers, not legal advice. A module whose licence is NOASSERTION (no licence file, or a text the tool does not recognise) or is not in 'allowed' fails the check unless 'allowlist' has an entry for that exact module AND version with a non-empty reason written by the person who reviewed it: {\"module\": \"example.invalid/mod\", \"version\": \"v1.2.3\", \"licence\": \"<what the reviewer found>\", \"reason\": \"<why it is acceptable, and where the licence was confirmed>\"}.",
+  "allowed": [
+    "AGPL-3.0-only",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT"
+  ],
+  "allowlist": []
+}

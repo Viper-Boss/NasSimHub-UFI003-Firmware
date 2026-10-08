@@ -19,15 +19,18 @@ import (
 	"time"
 
 	"github.com/human-agent65535/nassimhub-node/agent/internal/httpapi"
+	"github.com/human-agent65535/nassimhub-node/agent/internal/hwid"
 	"github.com/human-agent65535/nassimhub-node/agent/internal/identity"
 	"github.com/human-agent65535/nassimhub-node/agent/internal/localadmin"
 	"github.com/human-agent65535/nassimhub-node/agent/internal/logbuf"
 	"github.com/human-agent65535/nassimhub-node/agent/internal/pairing"
+	"github.com/human-agent65535/nassimhub-node/agent/internal/pqidentity"
 	"github.com/human-agent65535/nassimhub-node/agent/internal/transportkey"
 	"github.com/human-agent65535/nassimhub-node/agent/internal/voicemedia"
 	"github.com/human-agent65535/nassimhub-node/agent/modembackend"
 	"github.com/human-agent65535/nassimhub-node/agent/netbackend"
 	"github.com/human-agent65535/nassimhub-node/agent/nodetls"
+	"github.com/human-agent65535/nassimhub-node/agent/trust"
 	"github.com/human-agent65535/nassimhub-node/proto"
 	"github.com/human-agent65535/nassimhub-node/xport/kcp"
 )
@@ -89,6 +92,17 @@ type Options struct {
 	// as last year's.
 	PQProfile proto.PQProfile
 	PQPolicy  proto.PQPolicy
+	// PQIdentityPolicy is how much post-quantum identity to demand of the Core:
+	// optional, preferred or required. The security level can only make it
+	// stricter (PQ_EXTREME requires it), never weaker.
+	PQIdentityPolicy proto.PQIdentityPolicy
+	// DisablePQIdentity keeps the device classical even on a build with
+	// ML-DSA. It does not delete an existing key.
+	DisablePQIdentity bool
+	// Updates is the agent update service, built by the binary's main from
+	// the start-up decision. Nil leaves the update endpoints answering
+	// NotSupported.
+	Updates httpapi.Updates
 	// SecurityLevel is the outward-facing setting. When set it DECIDES the
 	// profile and policy above: one conversion point, so a level and a profile
 	// that disagree cannot both be honoured somewhere.
@@ -109,6 +123,17 @@ type Options struct {
 	// KCPListeners are the UDP addresses for the weak-network transport.
 	// Empty uses the same addresses as Listeners, on UDP.
 	KCPListeners []string
+
+	// DisableTrustEnforcement leaves out device-local trust enforcement: no
+	// policy is loaded, nothing is gated and the trust endpoints answer 404,
+	// exactly as on an agent that predates them. It exists so the mock Node
+	// can stand in for such an agent in a gateway test; the device binary does
+	// not set it.
+	DisableTrustEnforcement bool
+	// HardwareIdentity reads the device's credible hardware identifier. Nil
+	// reads the kernel's Qualcomm socinfo, which simply reports "not present"
+	// on a machine that has none. See agent/internal/hwid.
+	HardwareIdentity func() proto.HardwareIdentity
 }
 
 // Server is a running Node.
@@ -116,6 +141,12 @@ type Server struct {
 	Identity *identity.Identity
 	Pairing  *pairing.Store
 	Logs     *logbuf.Buffer
+	// PQIdentity is the device's additional post-quantum identity, or the
+	// reason it has none.
+	PQIdentity *pqidentity.Store
+	// Trust is the device-local trust gate, or nil when enforcement is left
+	// out (Options.DisableTrustEnforcement).
+	Trust *trust.Gate
 
 	adminHandler     http.Handler
 	adminCertificate *tls.Certificate
@@ -193,18 +224,108 @@ func New(options Options) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load device identity: %w", err)
 	}
+	// The security level is resolved before the pairing store is opened,
+	// because how much post-quantum identity to demand of the Core is part of
+	// what the store enforces.
+	level := options.SecurityLevel
+	if level != "" {
+		if err := proto.ValidateSecurityLevel(level); err != nil {
+			return nil, err
+		}
+	} else {
+		// A configuration written before levels existed sets the profile and
+		// policy directly; read the level it amounts to.
+		legacyProfile, legacyPolicy := options.PQProfile, options.PQPolicy
+		if legacyProfile == "" {
+			legacyProfile = proto.PQStandard
+		}
+		if legacyPolicy == "" {
+			legacyPolicy = proto.PQPreferred
+		}
+		level = proto.LevelFor(legacyProfile, legacyPolicy)
+	}
+	identityPolicy := options.PQIdentityPolicy
+	if identityPolicy == "" {
+		identityPolicy = proto.PQIdentityOptional
+	}
+	if err := proto.ValidatePQIdentityPolicy(identityPolicy); err != nil {
+		return nil, err
+	}
+	identityPolicy = stricterIdentityPolicy(identityPolicy, proto.IdentityRequirementFor(level))
+
 	pairs, err := pairing.Open(pairing.Options{
-		Dir:        options.StateDir,
-		DeviceID:   loaded.DeviceID,
-		SessionTTL: options.SessionTTL,
+		Dir:              options.StateDir,
+		DeviceID:         loaded.DeviceID,
+		SessionTTL:       options.SessionTTL,
+		PQIdentityPolicy: identityPolicy,
+		SecurityLevel:    level,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("load pairing state: %w", err)
+	}
+	// The real provider, when this build has one. Registered here rather than
+	// in each binary's main so the mock Node and the agent cannot differ.
+	proto.EnableStandardPQ()
+	postQuantum, err := pqidentity.LoadOrCreate(pqidentity.Options{
+		Dir:       options.StateDir,
+		DeviceID:  loaded.DeviceID,
+		DeviceKey: loaded.PrivateKey(),
+		Algorithm: proto.PQAlgorithmFor(level),
+		Disabled:  options.DisablePQIdentity,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prepare post-quantum identity: %w", err)
 	}
 	if options.Network == nil {
 		options.Network = options.NetworkFactory(loaded.DeviceID)
 	}
 	logs := logbuf.New(logbuf.Options{Dir: options.LogDir})
+	switch postQuantum.Status() {
+	case pqidentity.StatusActive:
+		logs.Infof("identity", "post-quantum identity active (%s)", postQuantum.Identity().Algorithm)
+		if err := proto.CheckPQAlgorithmForLevel(level, postQuantum.Identity()); err != nil {
+			// The stored key is kept - rotating it is the owner's decision -
+			// but a Core at this level will refuse it, so say what to do.
+			logs.Warnf("identity", "the stored post-quantum key is %s and %s expects %s; "+
+				"remove pq-identity.json from the state directory and restart to generate one, "+
+				"then accept the new key on the NAS",
+				postQuantum.Identity().Algorithm, level, proto.PQAlgorithmFor(level))
+		}
+	case pqidentity.StatusDamaged:
+		// Loud, because a Core that pinned the previous key will now refuse
+		// this device, and the owner needs to know why.
+		logs.Errorf("identity", "post-quantum identity is not usable and was NOT regenerated: %s", postQuantum.Detail())
+	default:
+		logs.Infof("identity", "no post-quantum identity: %s", postQuantum.Detail())
+	}
+
+	// The trust gate verifies a policy against the owner the pairing store has
+	// pinned, under the same post-quantum identity policy the store enforces
+	// on signed requests. It is opened here, once, and handed to both the Core
+	// protocol handler and the standalone console, so there is one gate.
+	var gateOfTrust *trust.Gate
+	if !options.DisableTrustEnforcement {
+		gateOfTrust, err = trust.Open(trust.Options{
+			Dir: options.StateDir, DeviceID: loaded.DeviceID, Owner: pairs.Owner, PQPolicy: identityPolicy,
+			Logf: func(level proto.LogLevel, format string, arguments ...any) {
+				switch level {
+				case proto.LogError:
+					logs.Errorf("trust", format, arguments...)
+				case proto.LogWarn:
+					logs.Warnf("trust", format, arguments...)
+				default:
+					logs.Infof("trust", format, arguments...)
+				}
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("prepare trust enforcement: %w", err)
+		}
+	}
+	hardware := options.HardwareIdentity
+	if hardware == nil {
+		hardware = hwid.System
+	}
 
 	profile := options.PQProfile
 	if profile == "" {
@@ -284,6 +405,10 @@ func New(options Options) (*Server, error) {
 			return nil, fmt.Errorf("prepare admin certificate: %w", err)
 		}
 		adminCertificate = &issued
+		// localadmin: read-only security and update pages; see admin.go.
+		sources := adminSources(loaded, pairs, postQuantum, proto.LevelFor(profile, policy), identityPolicy, adminCertificate, options.Updates, options.Network, logs)
+		sources.Trust, sources.RequireSendSMS = adminTrust(gateOfTrust), adminRequireSendSMS(gateOfTrust)
+		admin.Attach(sources)
 		if options.AdminListen == "" {
 			options.AdminListen = "127.0.0.1:0"
 		}
@@ -311,12 +436,16 @@ func New(options Options) (*Server, error) {
 		PQProfile:        profile,
 		PQPolicy:         policy,
 		TransportKeys:    transportKeyIssuer{store: keys},
-		// The device holds no post-quantum identity yet: no build can produce
-		// one until crypto/x509 carries ML-DSA. Reporting an empty identity is
-		// the honest answer, and the schema is already in place so that the
-		// day it exists, nothing above this line changes.
-		PQIdentity:    func() proto.PQIdentity { return proto.PQIdentity{} },
-		SecurityLevel: proto.LevelFor(profile, policy),
+		// The post-quantum identity is additional to the Ed25519 one and never
+		// derives device_id. A device without one publishes an empty identity,
+		// which is the honest answer for an older build or a damaged key.
+		PQIdentity:       postQuantum.Identity,
+		PQSigner:         postQuantum.Signer,
+		PQIdentityPolicy: identityPolicy,
+		Updates:          options.Updates,
+		Trust:            gateOfTrust,
+		Hardware:         hardware,
+		SecurityLevel:    proto.LevelFor(profile, policy),
 		// A function rather than a value: the counters change while the
 		// process runs, and the handler must never hold a snapshot that
 		// silently becomes a description of a link that no longer exists.
@@ -328,7 +457,9 @@ func New(options Options) (*Server, error) {
 	options.TransportMode = mode
 	return &Server{
 		Identity: loaded, Pairing: pairs, Logs: logs,
-		handler: handler, options: options,
+		PQIdentity: postQuantum,
+		Trust:      gateOfTrust,
+		handler:    handler, options: options,
 		adminHandler: adminHandler, adminCertificate: adminCertificate,
 		certificate: certificate,
 		links:       map[string]*link{},
@@ -337,6 +468,24 @@ func New(options Options) (*Server, error) {
 		keys:        keys,
 		auth:        auth,
 	}, nil
+}
+
+// stricterIdentityPolicy returns whichever of two policies demands more.
+func stricterIdentityPolicy(a, b proto.PQIdentityPolicy) proto.PQIdentityPolicy {
+	rank := func(policy proto.PQIdentityPolicy) int {
+		switch policy {
+		case proto.PQIdentityRequired:
+			return 2
+		case proto.PQIdentityPreferred:
+			return 1
+		default:
+			return 0
+		}
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
 }
 
 // serverTLSConfig builds the listener configuration: the device certificate

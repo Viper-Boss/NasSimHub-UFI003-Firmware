@@ -8,5 +8,5 @@
   "kernel_version": "6.12.49-msm8916-g93a71ee9468d",
   "reference_builder_repository": "https://github.com/KyonLi/ufi003-debian",
   "reference_builder_commit": "b8c4691b2e6b885ca4d45f220a241ceabf9a991a",
-  "note": "Source provenance only. Bootloader, kernel packages and firmware are not automatically downloaded or redistributed. Debian archive snapshot and package hashes are not frozen yet; bit-for-bit rootfs reproducibility remains pending."
+  "note": "Source provenance only. Bootloader, kernel packages and firmware are not automatically downloaded or redistributed. The Debian archive snapshot and package versions are pinned by firmware/rootfs.lock.json once it is resolved (scripts/build-rootfs.sh --lock, docs/ROOTFS-BUILD.md); the lock in this repository is still UNRESOLVED, so bit-for-bit rootfs reproducibility remains pending."
 }

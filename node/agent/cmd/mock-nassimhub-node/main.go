@@ -26,10 +26,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/human-agent65535/nassimhub-node/agent/internal/hwid"
 	"github.com/human-agent65535/nassimhub-node/agent/modembackend/mock"
 	"github.com/human-agent65535/nassimhub-node/agent/netbackend"
 	netmock "github.com/human-agent65535/nassimhub-node/agent/netbackend/mock"
 	"github.com/human-agent65535/nassimhub-node/agent/nodeserver"
+	"github.com/human-agent65535/nassimhub-node/agent/ota"
 	"github.com/human-agent65535/nassimhub-node/proto"
 )
 
@@ -59,9 +61,43 @@ func run(arguments []string) error {
 		// what a gateway end-to-end test needs to exercise key pinning.
 		useTLS       = flags.Bool("tls", false, "serve the node protocol over device-certificate TLS")
 		platformName = flags.String("platform", "mock", "reported platform: mock or msm8916")
+		// Development only: the security level and whether the device holds a
+		// post-quantum identity, so a gateway test can meet an older device, a
+		// current one and a PQ_EXTREME one without three builds.
+		securityLevel = flags.String("security-level", "", "STANDARD, PQ or PQ_EXTREME; empty keeps the default")
+		pqIdentity    = flags.Bool("pq-identity", true, "hold a post-quantum identity key when this build has ML-DSA")
+		// Development only: the real update mechanism, against real files.
+		// The mock restarts by exiting; a test harness (or a shell loop) plays
+		// the part systemd plays on a device.
+		otaKeys = flags.String("ota-keys", "", "release key file; empty disables updates")
+		// The agent's ota_signature_policy setting.
+		otaSignatures = flags.String("ota-signature-policy", "", "preferred or required; empty is preferred, and a security level that demands dual-signed updates raises it to required")
+		showVer       = flags.Bool("version", false, "print the version and exit")
+		// A build without -ldflags reports "dev", which is not a release
+		// version: the update mechanism then stays off and says so, exactly
+		// as on a device. -ota-version gives such a build a version to be
+		// updated from.
+		otaVersion = flags.String("ota-version", "", "override the version this binary reports (development); updates need a release version, not \"dev\"")
+		// Development only: stand in for an agent that predates device-local
+		// trust enforcement (the trust endpoints then answer 404), and give the
+		// mock a hardware identifier to report. The directory is laid out like
+		// /sys/devices/soc0 (family, serial_number, soc_id, machine) and is read
+		// on every request, so a test can change the serial while the node runs.
+		trustEnforcement = flags.Bool("trust-enforcement", true, "enforce the trust policy the paired core signs; false behaves like an older agent")
+		socinfoDir       = flags.String("socinfo-dir", "", "directory standing in for /sys/devices/soc0; empty reports no hardware identifier")
 	)
 	if err := flags.Parse(arguments); err != nil {
 		return err
+	}
+
+	if *otaVersion != "" {
+		version = *otaVersion
+	}
+	if *showVer {
+		// The same line the agent prints, because an update is validated by
+		// running the staged binary with -version and reading it.
+		fmt.Printf("nassimhub-agent %s (protocol %s.%d, mock)\n", version, proto.ProtocolVersion, proto.ProtocolMinor)
+		return nil
 	}
 
 	resolved, ok := mock.ScenarioByName(*scenario)
@@ -86,8 +122,47 @@ func run(arguments []string) error {
 		return fmt.Errorf("unknown platform %q; use mock or msm8916", *platformName)
 	}
 
+	// As in nassimhub-agent: the provider before the start-up check, and the
+	// update signature policy the security level demands, so the mock at
+	// PQ_EXTREME takes the same path through start-up as a device does.
+	level := proto.SecurityLevel(strings.TrimSpace(*securityLevel))
+	proto.EnableStandardPQ()
+	launched, err := ota.Launch(ota.LaunchOptions{
+		StateDir:        directory,
+		Version:         version,
+		KeyFile:         *otaKeys,
+		Platform:        platform,
+		Channel:         proto.OTAChannelStable,
+		SignaturePolicy: mockSignaturePolicy(level, *otaSignatures),
+		Arguments:       arguments,
+		Disabled:        *otaKeys == "",
+		Logf: func(format string, arguments ...any) {
+			fmt.Fprintf(os.Stderr, "mock-nassimhub-node: update: "+format+"\n", arguments...)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	restartRequested := make(chan string, 1)
+	updater, err := ota.NewUpdater(ota.UpdaterOptions{
+		Decision: launched.Decision,
+		StateDir: directory,
+		Keys:     launched.Keys,
+		Restart: func(reason string) {
+			select {
+			case restartRequested <- reason:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		return err
+	}
+	defer updater.Close()
+
 	modem := mock.New(mock.Options{Scenario: resolved})
 	server, err := nodeserver.New(nodeserver.Options{
+		Updates:   updater,
 		StateDir:  directory,
 		Platform:  platform,
 		Model:     model,
@@ -100,8 +175,13 @@ func run(arguments []string) error {
 		NetworkFactory: func(deviceID string) netbackend.Backend {
 			return netmock.New(netmock.Options{DeviceID: deviceID, SavedSSID: *wifiSSID})
 		},
-		AgentVersion: "mock-" + version,
-		BuildDate:    time.Now().UTC().Format("2006-01-02"),
+		AgentVersion:      mockAgentVersion(*otaKeys),
+		BuildDate:         time.Now().UTC().Format("2006-01-02"),
+		SecurityLevel:     level,
+		DisablePQIdentity: !*pqIdentity,
+
+		DisableTrustEnforcement: !*trustEnforcement,
+		HardwareIdentity:        mockHardware(*socinfoDir),
 	})
 	if err != nil {
 		return err
@@ -140,7 +220,12 @@ func run(arguments []string) error {
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	<-signals
+	go updater.Supervise(context.Background())
+	select {
+	case <-signals:
+	case reason := <-restartRequested:
+		fmt.Fprintf(os.Stderr, "mock-nassimhub-node: restarting: %s\n", reason)
+	}
 
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -148,6 +233,17 @@ func run(arguments []string) error {
 		_ = controlServer.Shutdown(shutdown)
 	}
 	return server.Stop(shutdown)
+}
+
+// mockHardware never reads this machine's own SoC: a mock Node reporting the
+// development host's serial as "the module" would be a fabricated identity.
+func mockHardware(directory string) func() proto.HardwareIdentity {
+	if strings.TrimSpace(directory) == "" {
+		return func() proto.HardwareIdentity {
+			return proto.HardwareIdentity{Present: false, Reason: "mock node: no hardware identifier configured"}
+		}
+	}
+	return hwid.Dir(directory)
 }
 
 func addresses(values ...string) []string {
@@ -183,7 +279,7 @@ func controlAPI(modem *mock.Backend, server *nodeserver.Server, usbAddr, wifiAdd
 			"device_id": server.Identity.DeviceID,
 			"endpoints": []string{
 				"POST /control/sms/incoming?from=10086&text=hello",
-				"POST /control/call/incoming?from=%2B8613900139000",
+				"POST /control/call/incoming?from=%2B8610000000010",
 				"POST /control/sim?state=ready|missing|pin_locked|puk_locked",
 				"POST /control/modem?state=ready|offline|failed",
 				"POST /control/modem/restart?seconds=10",
@@ -207,7 +303,7 @@ func controlAPI(modem *mock.Backend, server *nodeserver.Server, usbAddr, wifiAdd
 	})
 
 	mux.HandleFunc("POST /control/call/incoming", func(w http.ResponseWriter, r *http.Request) {
-		call, err := modem.InjectIncomingCall(valueOr(r, "from", "+8613900139000"))
+		call, err := modem.InjectIncomingCall(valueOr(r, "from", "+8610000000010"))
 		if err != nil {
 			fail(w, err)
 			return
@@ -306,4 +402,28 @@ func valueOr(r *http.Request, key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// mockAgentVersion is what the Node reports as its agent version.
+//
+// Normally "mock-<version>", so nobody mistakes a mock for a device. With the
+// update mechanism enabled it is the bare version, because an update is judged
+// by whether the agent that came up reports the version the manifest promised.
+// mockSignaturePolicy mirrors nassimhub-agent's updateSignaturePolicy: the
+// stricter of the configured policy and the one the security level demands.
+func mockSignaturePolicy(level proto.SecurityLevel, configured string) proto.OTASignaturePolicy {
+	if proto.OTARequirementFor(level) == proto.OTASignatureRequired {
+		return proto.OTASignatureRequired
+	}
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return proto.OTASignaturePolicy(configured)
+	}
+	return proto.OTASignaturePreferred
+}
+
+func mockAgentVersion(otaKeys string) string {
+	if otaKeys != "" {
+		return version
+	}
+	return "mock-" + version
 }

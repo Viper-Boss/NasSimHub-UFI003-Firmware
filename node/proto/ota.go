@@ -441,9 +441,10 @@ type OTAStatus struct {
 	// ConfirmDeadline is when an unconfirmed update will be rolled back.
 	ConfirmDeadline time.Time `json:"confirm_deadline,omitempty"`
 	UpdatedAt       time.Time `json:"updated_at"`
-	// Supported is false on a build with no installer wired up, which is every
-	// build in this software-only stage. It exists so Core can grey the button
-	// out rather than offering an action that will always fail.
+	// Supported is false when this device cannot install an update: a build
+	// with no installer, no release keys to verify one against, or an
+	// installation that cannot be switched. It exists so Core can grey the
+	// button out rather than offering an action that will always fail.
 	Supported bool `json:"supported"`
 }
 

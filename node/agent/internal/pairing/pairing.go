@@ -78,6 +78,10 @@ var (
 	ErrReplay = errors.New("request nonce was already used")
 	// ErrBadSession is returned for an unknown or expired bearer token.
 	ErrBadSession = errors.New("session token is not valid")
+	// ErrPQSignature is returned when the Core's post-quantum signature is
+	// missing where one is demanded, does not verify, or names a key other
+	// than the pinned one. The wrapped error says which.
+	ErrPQSignature = errors.New("post-quantum request signature was not accepted")
 )
 
 type document struct {
@@ -86,7 +90,11 @@ type document struct {
 	CoreID        string             `json:"core_id,omitempty"`
 	CoreName      string             `json:"core_name,omitempty"`
 	CorePublicKey string             `json:"core_public_key,omitempty"`
-	PairedAt      time.Time          `json:"paired_at,omitempty"`
+	// CorePQ is the Core's post-quantum key, pinned the first time the Core
+	// proved possession of it. Absent on a pairing made by an older Core or on
+	// a build that could not verify it; such a file loads exactly as before.
+	CorePQ   *proto.PQIdentity `json:"core_pq,omitempty"`
+	PairedAt time.Time         `json:"paired_at,omitempty"`
 }
 
 type session struct {
@@ -105,6 +113,9 @@ type Store struct {
 	coreID   string
 	coreName string
 	coreKey  ed25519.PublicKey
+	corePQ   proto.PQIdentity
+	pqPolicy proto.PQIdentityPolicy
+	level    proto.SecurityLevel
 	pairedAt time.Time
 	sessions map[string]session
 	nonces   map[string]time.Time
@@ -115,6 +126,14 @@ type Options struct {
 	Dir        string
 	DeviceID   string
 	SessionTTL time.Duration
+	// PQIdentityPolicy is how much post-quantum authentication to demand of
+	// the Core on the requests it signs. Empty means optional. Whatever the
+	// policy, a Core whose post-quantum key has been pinned must keep signing
+	// with it: see proto/pqattest.go.
+	PQIdentityPolicy proto.PQIdentityPolicy
+	// SecurityLevel decides which post-quantum parameter sets are acceptable
+	// from the Core: PQ_EXTREME accepts only ML-DSA-87.
+	SecurityLevel proto.SecurityLevel
 	// Now is injectable so tests can exercise expiry and skew without sleeping.
 	Now func() time.Time
 }
@@ -132,7 +151,16 @@ func Open(options Options) (*Store, error) {
 	if now == nil {
 		now = time.Now
 	}
+	policy := options.PQIdentityPolicy
+	if policy == "" {
+		policy = proto.PQIdentityOptional
+	}
+	if err := proto.ValidatePQIdentityPolicy(policy); err != nil {
+		return nil, err
+	}
 	store := &Store{
+		pqPolicy: policy,
+		level:    options.SecurityLevel,
 		path:     filepath.Join(options.Dir, FileName),
 		deviceID: options.DeviceID,
 		ttl:      ttl,
@@ -170,6 +198,12 @@ func (s *Store) load() error {
 	s.coreID = stored.CoreID
 	s.coreName = stored.CoreName
 	s.coreKey = key
+	if stored.CorePQ != nil && stored.CorePQ.Present() {
+		if err := stored.CorePQ.Validate(); err != nil {
+			return fmt.Errorf("pairing state %s has an unreadable core post-quantum key: %w", s.path, err)
+		}
+		s.corePQ = *stored.CorePQ
+	}
 	s.pairedAt = stored.PairedAt
 	return nil
 }
@@ -180,6 +214,10 @@ func (s *Store) persistLocked() error {
 		stored.CoreID = s.coreID
 		stored.CoreName = s.coreName
 		stored.CorePublicKey = proto.EncodeKey(s.coreKey)
+		if s.corePQ.Present() {
+			pinned := s.corePQ
+			stored.CorePQ = &pinned
+		}
 		stored.PairedAt = s.pairedAt
 	}
 	encoded, err := json.MarshalIndent(stored, "", "  ")
@@ -224,6 +262,20 @@ func (s *Store) OwnerFingerprint() string {
 	return proto.CoreFingerprint(s.coreKey)
 }
 
+// Owner reports the paired Core as the Node has pinned it: its id, its Ed25519
+// key and, when one was proven, its post-quantum key. ok is false on an
+// unpaired Node. It is what an identity attestation is built from, so the
+// transcript describes the trust the Node actually holds rather than whatever
+// a request claimed.
+func (s *Store) Owner() (coreID string, key ed25519.PublicKey, pq proto.PQIdentity, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != proto.PairingPaired {
+		return "", nil, proto.PQIdentity{}, false
+	}
+	return s.coreID, append(ed25519.PublicKey(nil), s.coreKey...), s.corePQ, true
+}
+
 // SignedRequest is everything needed to authenticate a signed call.
 type SignedRequest struct {
 	CoreID    string
@@ -233,6 +285,10 @@ type SignedRequest struct {
 	Method    string
 	Path      string
 	Body      []byte
+	// PQSignature and PQAlgorithm are the Core's optional post-quantum
+	// signature over the same canonical bytes.
+	PQSignature string
+	PQAlgorithm proto.PQSignatureAlgorithm
 }
 
 // Pair binds this Node to a Core. The request must be signed with the private
@@ -260,25 +316,73 @@ func (s *Store) Pair(request proto.PairRequest, signed SignedRequest) (proto.Ses
 	if s.state == proto.PairingPaired {
 		// Re-pairing with the same owner is idempotent: a Core that lost its
 		// local record but kept its key may recover without a user unpair.
-		if s.coreID == request.CoreID && s.coreKey.Equal(key) {
-			return s.issueSessionLocked(), nil
+		if s.coreID != request.CoreID || !s.coreKey.Equal(key) {
+			return proto.Session{}, ErrAlreadyPaired
 		}
-		return proto.Session{}, ErrAlreadyPaired
+		verified, err := s.verifyCorePQLocked(signed, request.OfferedPQ())
+		if err != nil {
+			return proto.Session{}, err
+		}
+		// It is also how a pairing made before the Core had a post-quantum
+		// key gains one: the same owner, proven classically, now also proves
+		// possession of the new key, and it is pinned from here on.
+		if verified && !s.corePQ.Present() {
+			s.corePQ = request.OfferedPQ()
+			if err := s.persistLocked(); err != nil {
+				s.corePQ = proto.PQIdentity{}
+				return proto.Session{}, err
+			}
+		}
+		return s.issueSessionLocked(), nil
+	}
+
+	verified, err := s.verifyCorePQLocked(signed, request.OfferedPQ())
+	if err != nil {
+		return proto.Session{}, err
 	}
 
 	s.state = proto.PairingPaired
 	s.coreID = request.CoreID
 	s.coreName = request.CoreName
 	s.coreKey = key
+	if verified {
+		s.corePQ = request.OfferedPQ()
+	}
 	s.pairedAt = s.now().UTC()
 	if err := s.persistLocked(); err != nil {
 		// Roll back in memory so a failed write does not leave the Node
 		// believing it is paired while the disk says otherwise.
 		s.state = proto.PairingUnpaired
 		s.coreID, s.coreName, s.coreKey = "", "", nil
+		s.corePQ = proto.PQIdentity{}
 		return proto.Session{}, err
 	}
 	return s.issueSessionLocked(), nil
+}
+
+// verifyCorePQLocked applies the post-quantum half of request authentication.
+//
+// It runs only after the Ed25519 signature has verified, for the reason given
+// in proto.VerifyPairingTranscript: a second signature over a request the
+// owner's classical key did not sign proves nothing about the owner. The
+// result says whether a post-quantum signature was actually verified, which is
+// the only circumstance in which an offered key may be pinned.
+func (s *Store) verifyCorePQLocked(signed SignedRequest, offered proto.PQIdentity) (bool, error) {
+	// The parameter set is checked on whichever key would be relied on: the
+	// pinned one, or the one being offered for pinning.
+	candidate := s.corePQ
+	if !candidate.Present() {
+		candidate = offered
+	}
+	if err := proto.CheckPQAlgorithmForLevel(s.level, candidate); err != nil {
+		return false, fmt.Errorf("%w: %w", ErrPQSignature, err)
+	}
+	canonical := proto.SigningString(signed.Method, signed.Path, signed.Timestamp, signed.Nonce, signed.Body)
+	verified, err := proto.VerifyCorePQSignature(canonical, signed.PQSignature, signed.PQAlgorithm, s.corePQ, offered, s.pqPolicy)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", ErrPQSignature, err)
+	}
+	return verified, nil
 }
 
 // NewSession mints a bearer token for the already-paired owner. The request
@@ -299,6 +403,9 @@ func (s *Store) NewSession(coreID string, signed SignedRequest) (proto.Session, 
 	if !verifySignature(s.coreKey, signed) {
 		return proto.Session{}, ErrBadSignature
 	}
+	if _, err := s.verifyCorePQLocked(signed, proto.PQIdentity{}); err != nil {
+		return proto.Session{}, err
+	}
 	return s.issueSessionLocked(), nil
 }
 
@@ -311,6 +418,7 @@ func (s *Store) Unpair() (proto.PairingState, error) {
 	}
 	s.state = proto.PairingUnpaired
 	s.coreID, s.coreName, s.coreKey = "", "", nil
+	s.corePQ = proto.PQIdentity{}
 	s.pairedAt = time.Time{}
 	s.sessions = map[string]session{}
 	if err := s.persistLocked(); err != nil {
@@ -333,6 +441,7 @@ func (s *Store) FactoryResetPairing(confirm string) (proto.PairingState, error) 
 	defer s.mu.Unlock()
 	s.state = proto.PairingUnpaired
 	s.coreID, s.coreName, s.coreKey = "", "", nil
+	s.corePQ = proto.PQIdentity{}
 	s.pairedAt = time.Time{}
 	s.sessions = map[string]session{}
 	s.nonces = map[string]time.Time{}

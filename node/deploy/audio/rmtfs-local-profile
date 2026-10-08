@@ -1,0 +1,31 @@
+#!/bin/sh
+# Optional per-device read-only profile. No profile or enable marker is shipped.
+# Keep calibration/private modem state on NSHSTATE, never inside a factory image.
+set -eu
+check=no
+case ${1:-} in '' ) ;; --check) check=yes;; *) exit 2;; esac
+selected=
+if [ -f /etc/nassimhub/local-volte.enabled ]; then
+ for profile in /var/lib/nassimhub/.private-modem/local-volte /var/lib/nassimhub-modem/local-volte; do
+  [ -d "$profile" ] && [ ! -L "$profile" ] || continue
+  good=yes
+  for name in modem_fs1 modem_fs2 modem_fsc modem_fsg SHA256SUMS; do
+   [ -f "$profile/$name" ] && [ ! -L "$profile/$name" ] || good=no
+  done
+  [ "$good" = yes ] || continue
+  if (cd "$profile" && sha256sum --status -c SHA256SUMS); then
+   selected=$profile
+   break
+  fi
+ done
+fi
+if [ "$check" = yes ]; then
+ [ -n "$selected" ] && printf 'verified profile: %s\n' "$selected" || printf 'original read-only partitions\n'
+ exit 0
+fi
+if [ -n "$selected" ]; then
+ echo 'rmtfs: verified local profile, read-only shadow mode'
+ exec /usr/bin/rmtfs -r -o "$selected" -s
+fi
+echo 'rmtfs: original read-only partitions'
+exec /usr/bin/rmtfs -r -P -s

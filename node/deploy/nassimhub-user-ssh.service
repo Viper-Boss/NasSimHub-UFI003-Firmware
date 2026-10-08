@@ -1,0 +1,18 @@
+[Unit]
+Description=NasSimHub user SSH (independent of private maintenance)
+After=network.target
+ConditionPathExists=/etc/nassimhub/system-admin/sshd_config
+
+[Service]
+Type=exec
+ExecStartPre=/usr/sbin/sshd -t -f /etc/nassimhub/system-admin/sshd_config
+ExecStart=/usr/sbin/sshd -D -e -f /etc/nassimhub/system-admin/sshd_config
+ExecReload=/bin/kill -HUP $MAINPID
+RuntimeDirectory=sshd
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

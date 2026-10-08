@@ -1,0 +1,22 @@
+{
+  "note": "Debian package NAMES the image recipe needs, kept beside upstream.lock.json. Versions are pinned by firmware/rootfs.lock.json once that lock is resolved (it is UNRESOLVED in this repository; docs/ROOTFS-BUILD.md); the packages actually present in a factory package are listed in its DEBIAN-PACKAGES.txt. scripts/build-rootfs.sh asks the bootstrap for exactly these names; scripts/package-factory.sh installs no package. docs/INSTALL.md names the same packages; scripts/test_tools.py and scripts/test_rootfs.py keep the list, the document, the lock and firmware/rootfs-dependencies.json in step.",
+  "base": [
+    "systemd",
+    "systemd-timesyncd",
+    "ca-certificates",
+    "network-manager",
+    "wpasupplicant",
+    "modemmanager",
+    "libqmi-utils",
+    "qrtr-tools",
+    "rmtfs",
+    "alsa-utils",
+    "polkitd"
+  ],
+  "setup_access_point": {
+    "packages": [
+      "dnsmasq-base"
+    ],
+    "why": "The setup access point is a NetworkManager profile with ipv4.method shared. In that mode NetworkManager starts the dnsmasq binary itself to give the joining phone an address; without it the profile cannot be activated. dnsmasq-base ships only the binary. The full dnsmasq package must NOT be installed in its place: it adds a system-wide DNS/DHCP service. Required only for a package built with NSH_SETUP_AP=on; package-factory.sh refuses that switch when /usr/sbin/dnsmasq is missing from the input rootfs. Not yet verified on hardware."
+  }
+}

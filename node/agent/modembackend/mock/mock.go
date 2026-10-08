@@ -48,11 +48,19 @@ type Scenario struct {
 
 // Preset scenarios for the three mainland operators, so a multi-Node demo
 // looks like a real household rather than three copies of one device.
+//
+// The phone numbers are deliberately not subscriber numbers: +86 10 followed by
+// a subscriber part that starts with 0000, which no mainland numbering plan
+// allocates (mobile numbers start 1[3-9]; a Beijing landline never starts with
+// 0). They keep the shape of a mainland mobile number in E.164 ("+86" and
+// eleven digits) so every length and format check still sees a normal value.
+// The same block is used for peers in tests: 000000NN for the mock's own lines,
+// 0000001N for callers and recipients.
 var (
 	ChinaMobile = Scenario{
 		OperatorName: "中国移动", OperatorCode: "46000",
 		ICCID: "89860412345678901234", IMSI: "460001234567890",
-		PhoneNumber: "+8613800138000",
+		PhoneNumber: "+8610000000001",
 		SignalDBM:   -76, AccessTechnology: proto.AccessLTE,
 		Registration: proto.RegRegistered, DataConnected: true, APN: "cmnet",
 		SIMState: proto.SIMReady, ModemState: proto.ModemReady,
@@ -61,7 +69,7 @@ var (
 	ChinaUnicom = Scenario{
 		OperatorName: "中国联通", OperatorCode: "46001",
 		ICCID: "89860298765432109876", IMSI: "460019876543210",
-		PhoneNumber: "+8613100131000",
+		PhoneNumber: "+8610000000002",
 		SignalDBM:   -83, AccessTechnology: proto.AccessLTE,
 		Registration: proto.RegRegistered, DataConnected: true, APN: "3gnet",
 		SIMState: proto.SIMReady, ModemState: proto.ModemReady,
@@ -70,7 +78,7 @@ var (
 	ChinaTelecom = Scenario{
 		OperatorName: "中国电信", OperatorCode: "46011",
 		ICCID: "89860311122233344455", IMSI: "460111112223334",
-		PhoneNumber: "+8618000180000",
+		PhoneNumber: "+8610000000003",
 		SignalDBM:   -91, AccessTechnology: proto.AccessLTE,
 		Registration: proto.RegRegistered, DataConnected: true, APN: "ctnet",
 		SIMState: proto.SIMReady, ModemState: proto.ModemReady,

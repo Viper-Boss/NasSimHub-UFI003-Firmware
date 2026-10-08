@@ -96,6 +96,13 @@ type DialRequest struct {
 	To        string `json:"to"`
 }
 
+// DTMFRequest sends one bounded sequence on an already active call. A request
+// ID is an at-most-once attempt; an uncertain response must not be retried.
+type DTMFRequest struct {
+	RequestID string `json:"request_id"`
+	Digits    string `json:"digits"`
+}
+
 // CallReceipt acknowledges a call command.
 type CallReceipt struct {
 	RequestID string    `json:"request_id"`

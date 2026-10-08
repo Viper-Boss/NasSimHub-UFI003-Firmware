@@ -7,9 +7,11 @@
 // touched anything else would be doing so outside the contract rather than
 // through it.
 //
-// The shipped installer is a mock. Replacing it with one that swaps a real file
-// is hardware-phase work, and the two things that implementation must preserve
-// are stated here rather than left to be rediscovered:
+// The installer that ships is FileInstaller (installer.go), which installs a
+// release beside the device state and never touches the agent in the system
+// image; MockInstaller remains for tests of the state machine itself. The two
+// things any installer must preserve are stated here rather than left to be
+// rediscovered:
 //
 //  1. The running binary is not touched until a staged one has been verified
 //     AND validated. Staging is hash verification; validation is executing the
@@ -156,6 +158,12 @@ type Options struct {
 	Installer       Installer
 	Logf            func(format string, arguments ...any)
 	Now             func() time.Time
+	// Resume loads the persisted state as it is, without resolving an
+	// interrupted update. It is set by an installed release that the factory
+	// agent has just started: that process already made the decision (see
+	// boot.go), and making it a second time would read the restart the update
+	// asked for as a second, unexpected one and undo a good update.
+	Resume bool
 }
 
 // Manager drives the state machine.
@@ -164,9 +172,16 @@ type Manager struct {
 	now     func() time.Time
 	logf    func(string, ...any)
 
+	// fetcherMu serialises operations that substitute the manifest source.
+	fetcherMu sync.Mutex
+
 	mu    sync.Mutex
 	state State
 	busy  bool
+	// currentVersion is the version of the agent that is, or is about to be,
+	// running. It starts as Options.CurrentVersion and changes only at
+	// start-up, when the factory agent works out which release will run.
+	currentVersion string
 	// signatures is what the last verified manifest carried. Reported to the
 	// UI and to diagnostics so that "this device installs classical-only
 	// updates" is visible rather than inferred.
@@ -208,9 +223,55 @@ func New(options Options) (*Manager, error) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	manager := &Manager{options: options, now: now, logf: logf}
+	manager := &Manager{options: options, now: now, logf: logf, currentVersion: options.CurrentVersion}
+	if options.Resume {
+		state, err := manager.read()
+		if err != nil || state.State == "" {
+			state = State{State: proto.OTAIdle, UpdatedAt: now().UTC()}
+		}
+		manager.state = state
+		return manager, nil
+	}
 	manager.state = manager.recover()
 	return manager, nil
+}
+
+// CurrentVersion is the version of the running agent as the manager sees it.
+func (m *Manager) CurrentVersion() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.currentVersion
+}
+
+// SetCurrentVersion corrects the running version at start-up, when the release
+// that was expected to run turns out not to be the one running.
+func (m *Manager) SetCurrentVersion(version string) {
+	m.mu.Lock()
+	m.currentVersion = version
+	m.mu.Unlock()
+}
+
+// failedToStart records a selected release that could not be executed. If it
+// was an unconfirmed update, the update is over and the record says why.
+func (m *Manager) failedToStart(releaseID string, cause error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	detail := "the installed release could not be started"
+	if cause != nil {
+		detail += ": " + cause.Error()
+	}
+	if m.state.State == proto.OTAPendingConfirm && (releaseID == "" || m.state.ReleaseID == releaseID) {
+		m.state.State = proto.OTARolledBack
+		m.state.RestartReason = proto.OTARestartWrongVersion
+		m.state.ExpectedRestart = false
+		m.state.ConfirmDeadline = time.Time{}
+	}
+	m.state.Error = detail
+	m.state.UpdatedAt = m.now().UTC()
+	if err := m.write(m.state); err != nil {
+		m.logf("could not persist update state: %v", err)
+	}
+	m.logf("%s", detail)
 }
 
 // recover reads the persisted state and resolves anything left mid-flight.
@@ -287,7 +348,7 @@ func (m *Manager) Status() proto.OTAStatus {
 	defer m.mu.Unlock()
 	return proto.OTAStatus{
 		State:           m.state.State,
-		CurrentVersion:  m.options.CurrentVersion,
+		CurrentVersion:  m.currentVersion,
 		TargetVersion:   m.state.TargetVersion,
 		PreviousVersion: m.state.PreviousVersion,
 		ReleaseID:       m.state.ReleaseID,
@@ -341,7 +402,7 @@ func (m *Manager) Check(ctx context.Context, manifestURL string) (proto.OTAManif
 		m.logf("update manifest is classical-only (no post-quantum signature)")
 	}
 	policy := m.options.Policy
-	policy.CurrentVersion = m.options.CurrentVersion
+	policy.CurrentVersion = m.CurrentVersion()
 	if err := proto.CheckManifest(manifest, policy); err != nil {
 		// Not applicable is not a failure of the device. Returning to IDLE
 		// rather than FAILED keeps "you are up to date" from looking like a
@@ -438,7 +499,7 @@ func (m *Manager) Apply(ctx context.Context) error {
 		return fmt.Errorf("%w: state is %s", ErrNotReady, current.State)
 	}
 	m.mu.Lock()
-	m.state.PreviousVersion = m.options.CurrentVersion
+	m.state.PreviousVersion = m.currentVersion
 	m.mu.Unlock()
 
 	m.transition(proto.OTAApplying, 95, "")
@@ -622,8 +683,8 @@ func (m *Manager) write(state State) error {
 //     never confirms is a new binary that is not working, however healthy it
 //     looks from inside.
 func (m *Manager) classifyRestart(state State) proto.OTARestartReason {
-	if state.TargetVersion != "" && m.options.CurrentVersion != "" &&
-		state.TargetVersion != m.options.CurrentVersion {
+	if state.TargetVersion != "" && m.currentVersion != "" &&
+		state.TargetVersion != m.currentVersion {
 		return proto.OTARestartWrongVersion
 	}
 	if !state.ConfirmDeadline.IsZero() && m.now().After(state.ConfirmDeadline) {
@@ -731,4 +792,43 @@ func (m *Manager) ExpireUnconfirmed(ctx context.Context) error {
 	m.mu.Unlock()
 	m.transition(proto.OTARolledBack, 0, explainRollback(proto.OTAConfirmTimeout))
 	return nil
+}
+
+// reset abandons an update that has not been applied, returning the machine to
+// IDLE so a different release can be offered.
+//
+// It is refused while an update is being applied, is awaiting confirmation or
+// is being undone: those states describe a binary that has been switched, and
+// leaving them by any route other than confirm or rollback would lose track of
+// which agent is supposed to be running.
+func (m *Manager) reset() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.busy {
+		return ErrBusy
+	}
+	switch m.state.State {
+	case proto.OTAApplying, proto.OTAPendingConfirm, proto.OTARollingBack:
+		return fmt.Errorf("%w: state is %s", ErrNotReady, m.state.State)
+	case proto.OTAIdle:
+		return nil
+	}
+	m.state.State = proto.OTAIdle
+	m.state.Progress = 0
+	m.state.Error = ""
+	m.state.StagedArtifact = nil
+	m.state.UpdatedAt = m.now().UTC()
+	return m.write(m.state)
+}
+
+// withFetcher runs one operation against a specific source. The Updater uses
+// it to hand the state machine a manifest and artifact that were pushed to the
+// device rather than fetched by it; the verification that follows is the same.
+func (m *Manager) withFetcher(fetcher Fetcher, run func() (proto.OTAManifest, error)) (proto.OTAManifest, error) {
+	m.fetcherMu.Lock()
+	defer m.fetcherMu.Unlock()
+	previous := m.options.Fetcher
+	m.options.Fetcher = fetcher
+	defer func() { m.options.Fetcher = previous }()
+	return run()
 }

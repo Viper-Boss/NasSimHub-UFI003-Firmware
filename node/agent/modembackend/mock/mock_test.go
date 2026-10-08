@@ -56,7 +56,7 @@ func TestSIMMissingHidesIdentityAndBlocksSend(t *testing.T) {
 	if info.SIMID() != "" {
 		t.Fatal("a missing SIM reported an identifier")
 	}
-	_, err = backend.SendSMS(ctx, proto.SendSMSRequest{RequestID: "r1", To: "+8613800138000", Text: "hi"})
+	_, err = backend.SendSMS(ctx, proto.SendSMSRequest{RequestID: "r1", To: "+8610000000001", Text: "hi"})
 	if got := codeOf(t, err); got != proto.ErrorFailedPrecondition {
 		t.Fatalf("send with no SIM returned %s", got)
 	}
@@ -127,7 +127,7 @@ func TestIncomingAndOutgoingSMS(t *testing.T) {
 		t.Fatal("an incoming message was not attributed to the card")
 	}
 
-	sent, err := backend.SendSMS(ctx, proto.SendSMSRequest{RequestID: "r1", To: "+8613100131000", Text: "hello"})
+	sent, err := backend.SendSMS(ctx, proto.SendSMSRequest{RequestID: "r1", To: "+8610000000002", Text: "hello"})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -151,11 +151,11 @@ func TestIncomingAndOutgoingSMS(t *testing.T) {
 
 func TestSendSMSIsIdempotentPerRequestID(t *testing.T) {
 	backend, ctx := newBackend(t, ChinaMobile)
-	first, err := backend.SendSMS(ctx, proto.SendSMSRequest{RequestID: "same", To: "+8613100131000", Text: "hello"})
+	first, err := backend.SendSMS(ctx, proto.SendSMSRequest{RequestID: "same", To: "+8610000000002", Text: "hello"})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	second, err := backend.SendSMS(ctx, proto.SendSMSRequest{RequestID: "same", To: "+8613100131000", Text: "hello"})
+	second, err := backend.SendSMS(ctx, proto.SendSMSRequest{RequestID: "same", To: "+8610000000002", Text: "hello"})
 	if err != nil {
 		t.Fatalf("retry: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestDeleteSMS(t *testing.T) {
 func TestIncomingCallRingingAnswerHangup(t *testing.T) {
 	backend, ctx := newBackend(t, ChinaMobile)
 
-	call, err := backend.InjectIncomingCall("+8613900139000")
+	call, err := backend.InjectIncomingCall("+8610000000010")
 	if err != nil {
 		t.Fatalf("inject call: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestIncomingCallRingingAnswerHangup(t *testing.T) {
 
 func TestAnswerRejectsWrongState(t *testing.T) {
 	backend, ctx := newBackend(t, ChinaMobile)
-	receipt, err := backend.Dial(ctx, proto.DialRequest{RequestID: "d1", To: "+8613900139000"})
+	receipt, err := backend.Dial(ctx, proto.DialRequest{RequestID: "d1", To: "+8610000000010"})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestVoiceCapabilityFalseBlocksDial(t *testing.T) {
 	if capabilities.VoiceControl {
 		t.Fatal("the unicom scenario should have no voice control")
 	}
-	_, err = backend.Dial(ctx, proto.DialRequest{RequestID: "d1", To: "+8613900139000"})
+	_, err = backend.Dial(ctx, proto.DialRequest{RequestID: "d1", To: "+8610000000010"})
 	if got := codeOf(t, err); got != proto.ErrorNotSupported {
 		t.Fatalf("dial on a voiceless node returned %s, want not_supported", got)
 	}
@@ -308,11 +308,11 @@ func TestModemOfflineReturnsCorrectErrors(t *testing.T) {
 	if _, err := backend.ListCalls(ctx); codeOf(t, err) != proto.ErrorUnavailable {
 		t.Fatalf("list calls returned %s", proto.CodeOf(err))
 	}
-	_, err = backend.SendSMS(ctx, proto.SendSMSRequest{RequestID: "r1", To: "+8613100131000", Text: "x"})
+	_, err = backend.SendSMS(ctx, proto.SendSMSRequest{RequestID: "r1", To: "+8610000000002", Text: "x"})
 	if codeOf(t, err) != proto.ErrorUnavailable {
 		t.Fatalf("send sms returned %s", proto.CodeOf(err))
 	}
-	_, err = backend.Dial(ctx, proto.DialRequest{RequestID: "d1", To: "+8613100131000"})
+	_, err = backend.Dial(ctx, proto.DialRequest{RequestID: "d1", To: "+8610000000002"})
 	if codeOf(t, err) != proto.ErrorUnavailable {
 		t.Fatalf("dial returned %s", proto.CodeOf(err))
 	}
@@ -325,7 +325,7 @@ func TestModemRestartClearsCallsAndRecovers(t *testing.T) {
 	defer backend.Close()
 	ctx := context.Background()
 
-	call, err := backend.InjectIncomingCall("+8613900139000")
+	call, err := backend.InjectIncomingCall("+8610000000010")
 	if err != nil {
 		t.Fatalf("inject: %v", err)
 	}
@@ -364,10 +364,10 @@ func TestModemRestartClearsCallsAndRecovers(t *testing.T) {
 
 func TestConcurrentCallIsRefused(t *testing.T) {
 	backend, ctx := newBackend(t, ChinaMobile)
-	if _, err := backend.Dial(ctx, proto.DialRequest{RequestID: "d1", To: "+8613900139000"}); err != nil {
+	if _, err := backend.Dial(ctx, proto.DialRequest{RequestID: "d1", To: "+8610000000010"}); err != nil {
 		t.Fatalf("first dial: %v", err)
 	}
-	_, err := backend.Dial(ctx, proto.DialRequest{RequestID: "d2", To: "+8613900139001"})
+	_, err := backend.Dial(ctx, proto.DialRequest{RequestID: "d2", To: "+8610000000011"})
 	if got := codeOf(t, err); got != proto.ErrorConflict {
 		t.Fatalf("second dial returned %s, want conflict", got)
 	}

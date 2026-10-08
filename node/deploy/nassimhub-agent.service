@@ -33,6 +33,8 @@ ExecStartPre=/usr/bin/nassimhub-agent -config /etc/nassimhub/agent.conf -check-c
 # always, not on-failure: a clean exit from this process is still a device that
 # has stopped answering its NAS, and there is no exit code that means "stay
 # stopped". An operator who wants it stopped uses systemctl.
+# Applying or rolling back an agent update is a clean exit that relies on this
+# line to start the factory agent again. Do not change it to on-failure.
 Restart=always
 RestartSec=5
 # Graceful shutdown. The agent closes its listeners, finishes in-flight

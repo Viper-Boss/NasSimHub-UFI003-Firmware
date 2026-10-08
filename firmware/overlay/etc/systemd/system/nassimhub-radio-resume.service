@@ -1,0 +1,15 @@
+[Unit]
+Description=Resume UFI003 radio after verified owner firmware is loaded
+Requires=nassimhub-device-firmware.service rmtfs.service
+Wants=qrtr-ns.service
+After=nassimhub-device-firmware.service rmtfs.service qrtr-ns.service
+Before=ModemManager.service NetworkManager.service nassimhub-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/nassimhub-radio-resume
+RemainAfterExit=yes
+TimeoutStartSec=75
+
+[Install]
+WantedBy=multi-user.target

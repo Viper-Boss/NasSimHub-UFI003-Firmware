@@ -27,8 +27,8 @@ import "fmt"
 // Three different things can be post-quantum and they are NOT the same claim:
 //
 //	confidentiality  the session key. ML-KEM, in crypto/tls, working today.
-//	authentication   who the peer is. ML-DSA, designed here, not yet enabled.
-//	OTA authenticity who signed this update. ML-DSA, designed here, not enabled.
+//	authentication   who the peer is. ML-DSA, on a toolchain that has it.
+//	OTA authenticity who signed this update. ML-DSA, on a toolchain that has it.
 //
 // A deployment with only ML-KEM has post-quantum CONFIDENTIALITY and classical
 // AUTHENTICATION. Calling that "quantum-resistant identity" would be false, and
@@ -66,10 +66,10 @@ const (
 	GoVersionForSecPHybrids = "go1.26"
 	// GoVersionForGroupObservation is when ConnectionState.CurveID appeared.
 	GoVersionForGroupObservation = "go1.25"
-	// GoVersionForMLDSA is when crypto/tls and crypto/x509 are expected to
-	// support ML-DSA certificates end to end. Until then the post-quantum
-	// identity in this product is schema, interface and tests - see
-	// proto/pqidentity.go.
+	// GoVersionForMLDSA is when the standard library gained crypto/mldsa
+	// (FIPS 204). A build from this version on carries the real post-quantum
+	// signature provider (pqmldsa_go127.go); an older one reports the
+	// capability as unavailable and names this version as the remedy.
 	GoVersionForMLDSA = "go1.27"
 )
 

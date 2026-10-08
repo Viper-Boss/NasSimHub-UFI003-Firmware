@@ -22,7 +22,7 @@ const (
 	// unauthenticated caller must never learn.
 	secretICCID  = "89860412345678901234"
 	secretIMSI   = "460001234567890"
-	secretNumber = "+8613800138000"
+	secretNumber = "+8610000000001"
 	secretPSK    = "SuperSecretWifiPassword"
 )
 

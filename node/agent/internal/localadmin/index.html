@@ -1,9 +1,107 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><title>NasSimHub · 棒子管理</title><link rel="stylesheet" href="/admin/style.css"><script src="/admin/app.js" defer></script></head>
-<body><div class="shell"><aside class="rail"><a class="brand" href="/">N<span>NasSimHub<small>独立设备管理</small></span></a><nav id="nav" hidden><button data-tab="overview" class="selected">◫ <span>设备概览</span></button><button data-tab="wifi">⌁ <span>无线网络</span></button><button data-tab="sms">▤ <span>短信管理</span></button><button data-tab="diagnostics">⌘ <span>诊断日志</span></button><button data-tab="settings">⚙ <span>管理设置</span></button></nav><div class="rail-foot">运行在棒子上<br>无需 NAS 或云服务</div></aside><main><header><div><small class="eyebrow">DEVICE CONSOLE</small><h1 id="title">棒子管理</h1><p id="identity">正在连接设备…</p></div><div class="actions"><span class="badge" id="connection">HTTPS</span><button id="refresh" hidden>刷新</button><button id="logout" class="quiet" hidden>退出登录</button></div></header><div id="notice" role="status" hidden></div>
-<section id="login" class="login card" hidden><div class="icon">N</div><h2 id="login-title">欢迎回来</h2><p id="login-help">输入本机管理密码，访问设备后台。</p><form id="login-form" novalidate><label id="setup-label" hidden>设备初始化码（高级维护）<input id="setup-code" autocomplete="off" spellcheck="false"></label><label>管理密码<input id="login-password" type="password" autocomplete="current-password" required maxlength="256"></label><label id="setup-confirm-label" hidden>确认管理密码<input id="setup-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="256"></label><p id="login-error" role="alert" hidden></p><button type="submit" class="primary" id="login-submit">登录设备</button></form><small>此密码独立于 NAS 登录和设备配对。</small></section>
-<div id="workspace" hidden><section id="overview" class="page"><div class="section-heading"><h2>设备运行状态</h2><span id="sample-time">—</span></div><div id="cards" class="cards"></div><div class="card"><div class="section-heading"><h3>进程与网络接口</h3><span>仅本机数据</span></div><div class="split"><div><h4>内存占用较高的进程</h4><div class="table-wrap"><table><thead><tr><th>PID</th><th>进程</th><th>内存</th></tr></thead><tbody id="processes"></tbody></table></div></div><div><h4>接口累计流量</h4><div id="interfaces"></div></div></div></div></section>
-<section id="wifi" class="page" hidden><div class="section-heading"><h2>Wi-Fi 配置</h2><button id="scan">扫描附近网络</button></div><div class="card"><div id="wifi-state" class="description">—</div><div id="networks" class="networks"></div><form id="wifi-form"><div class="split"><label>网络名称（SSID）<input id="ssid" required maxlength="32" autocomplete="off"></label><label>加密方式<select id="security"><option value="wpa2">WPA2 / 混合 WPA2-WPA3</option><option value="wpa3">WPA3</option><option value="open">开放网络</option></select></label></div><label>Wi-Fi 密码<input id="psk" type="password" maxlength="63" autocomplete="new-password"></label><div class="actions"><button class="primary" type="submit">连接并保存</button><button id="forget" type="button" class="danger">忘记已保存网络</button></div></form><p class="hint">密码只用于本次连接，不保存在浏览器。连接失败保留旧配置；USB 管理仍可使用。</p></div></section>
-<section id="sms" class="page" hidden><div class="section-heading"><h2>本机短信</h2><button id="sms-refresh">刷新短信</button></div><div class="card"><h3>发送短信</h3><form id="sms-form"><label>收件号码<input id="sms-number" type="tel" required maxlength="32" autocomplete="off"></label><label>短信内容<textarea id="sms-text" required maxlength="2000" rows="4"></textarea></label><button class="primary" type="submit">发送短信</button></form><p class="hint">通过当前 SIM 发送，可能按运营商资费计费。这里显示棒子上的短信，不是 NAS 的历史消息。</p></div><div id="messages" class="messages"></div></section>
-<section id="diagnostics" class="page" hidden><div class="section-heading"><h2>诊断与日志</h2><div class="actions"><button id="logs-refresh">刷新日志</button><button id="download-diag">下载诊断包</button></div></div><div class="card"><p class="hint">诊断包通过现有脱敏导出接口生成，不包含管理密码、Wi-Fi 密码或设备私钥。</p><pre id="logs">正在读取…</pre></div></section>
-<section id="settings" class="page" hidden><div class="section-heading"><h2>管理设置</h2><span>仅此设备</span></div><div class="split"><div class="card"><h3>修改管理密码</h3><form id="password-form"><label>原密码<input id="old-password" type="password" required autocomplete="current-password" maxlength="256"></label><label>新密码<input id="new-password" type="password" required minlength="12" maxlength="256" autocomplete="new-password"></label><label>确认新密码<input id="confirm-password" type="password" required minlength="12" maxlength="256" autocomplete="new-password"></label><button class="primary" type="submit">保存新密码</button></form><p class="hint">保存后其他管理会话失效。设备身份、NAS 配对和 SIM 数据保持不变。</p></div><div class="card"><h3>设备与软件</h3><div id="device-info"></div><hr><h3>维护说明</h3><p class="description">本后台常驻在设备的 HTTPS 服务上，通过 USB 或本机 Wi-Fi 地址均可访问。管理账户在持久存储中保存，重启后继续有效。</p><p class="description">通话的浏览器音频与 NAS 媒体链路仍需验收，本后台显示实际能力和呼叫状态。固件升级暂通过校验后的维护包执行。</p><p class="hint">UFI003 开机长按约 5 秒仍进入 Qualcomm 9008 / EDL，不作为恢复后台密码的手势。</p></div></div></section></div><footer>NasSimHub · 本机管理 · <a href="https://github.com/Viper-Boss/NasSimHub-UFI003-Firmware" target="_blank" rel="noopener noreferrer">开源代码 · AGPLv3</a> <span id="footer-id"></span></footer></main></div></body></html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>NasSimHub · 棒子管理</title><link rel="stylesheet" href="/admin/style.css"><script src="/admin/app.js" defer></script></head>
+<!-- Every visible string lives in the T object in app.js and is placed by data-t (text), data-t-label (aria-label) and data-t-placeholder. -->
+<body><a class="skip" href="#main" data-t="skip"></a><noscript><p class="noscript">此管理后台需要启用 JavaScript。This console needs JavaScript.</p></noscript>
+<div class="shell"><aside class="rail"><a class="brand" href="/"><b aria-hidden="true">N</b><span>NasSimHub<small data-t="brandSub"></small></span></a>
+<nav id="nav" hidden data-t-label="nav.label">
+<button type="button" data-tab="overview"><i aria-hidden="true">◫</i><span data-t="nav.overview"></span></button>
+<button type="button" data-tab="wifi"><i aria-hidden="true">⌁</i><span data-t="nav.wifi"></span></button>
+<button type="button" data-tab="sms"><i aria-hidden="true">▤</i><span data-t="nav.sms"></span></button>
+<button type="button" data-tab="security"><i aria-hidden="true">◈</i><span data-t="nav.security"></span></button>
+<button type="button" data-tab="update"><i aria-hidden="true">⟳</i><span data-t="nav.update"></span></button>
+<button type="button" data-tab="diagnostics"><i aria-hidden="true">⌘</i><span data-t="nav.diagnostics"></span></button>
+<button type="button" data-tab="system"><i aria-hidden="true">⌂</i><span data-t="nav.system"></span></button>
+<button type="button" data-tab="settings"><i aria-hidden="true">⚙</i><span data-t="nav.settings"></span></button>
+</nav><div class="rail-foot" data-t="railFoot"></div></aside>
+<main id="main" tabindex="-1"><header><div><small class="eyebrow">DEVICE CONSOLE</small><h1 id="title"></h1><p id="identity"></p></div><div class="actions"><span class="badge" id="connection">HTTPS</span><button type="button" id="refresh" hidden data-t="action.refresh"></button><button type="button" id="logout" class="quiet" hidden data-t="action.logout"></button></div></header>
+<div id="notice" role="status" aria-live="polite" hidden></div>
+
+<section id="login" class="login card" hidden aria-labelledby="login-title"><div class="icon" aria-hidden="true">N</div><h2 id="login-title" tabindex="-1"></h2><p id="login-help"></p>
+<p id="session-ended" class="banner" role="alert" hidden></p>
+<form id="login-form" novalidate>
+<label id="setup-label" hidden><span data-t="login.setupCode"></span><input id="setup-code" autocomplete="off" spellcheck="false" maxlength="64"></label>
+<label><span data-t="login.password"></span><input id="login-password" type="password" autocomplete="current-password" required maxlength="256" aria-describedby="login-error"></label>
+<label id="setup-confirm-label" hidden><span data-t="login.confirm"></span><input id="setup-confirm" type="password" autocomplete="new-password" maxlength="256" aria-describedby="login-error"></label>
+<p id="login-error" role="alert" hidden></p>
+<button type="submit" class="primary" id="login-submit"></button></form><small data-t="login.independent"></small></section>
+
+<div id="workspace" hidden>
+
+<section id="overview" class="page" aria-labelledby="overview-h"><div class="section-heading"><h2 id="overview-h" tabindex="-1" data-t="overview.title"></h2><span id="sample-time"></span></div>
+<p class="state" id="overview-state" role="status" hidden></p>
+<div id="cards" class="cards"></div>
+<div class="card" id="telemetry-card"><div class="section-heading"><h3 data-t="tele.title"></h3><span data-t="overview.localOnly"></span></div><div id="telemetry" class="split-cards"></div><p class="hint" data-t="tele.hint"></p><p class="hint" data-t="tele.cellHint"></p></div>
+<div class="card" id="overview-detail"><div class="section-heading"><h3 data-t="overview.processesAndInterfaces"></h3><span data-t="overview.localOnly"></span></div><div class="split"><div><h4 data-t="overview.topProcesses"></h4><div class="table-wrap"><table><thead><tr><th scope="col">PID</th><th scope="col" data-t="overview.process"></th><th scope="col" data-t="overview.memory"></th></tr></thead><tbody id="processes"></tbody></table></div><p class="hint" id="process-note" role="status"></p></div><div><h4 data-t="overview.interfaces"></h4><div id="interfaces"></div></div></div></div></section>
+
+<section id="wifi" class="page" hidden aria-labelledby="wifi-h"><div class="section-heading"><h2 id="wifi-h" tabindex="-1" data-t="wifi.title"></h2><button type="button" id="scan" data-t="wifi.scan"></button></div>
+<p class="state" id="wifi-state-panel" role="status" hidden></p>
+<div class="card" id="wifi-card"><div id="wifi-state" class="description"></div><p id="wifi-provisioning" class="description" role="status"></p>
+<p id="wifi-outcome" class="banner" role="status" aria-live="polite" hidden></p>
+<p class="state" id="networks-state" role="status" hidden></p><p id="scan-note" class="banner error" role="status" hidden></p><div id="networks" class="networks"></div>
+<form id="wifi-form" novalidate><div class="split">
+<label><span data-t="wifi.ssid"></span><input id="ssid" required maxlength="32" autocomplete="off" spellcheck="false" aria-describedby="ssid-error"><span class="field-error" id="ssid-error" role="alert" hidden></span></label>
+<label><span data-t="wifi.security"></span><select id="wifi-security"><option value="wpa2" data-t="wifi.wpa2"></option><option value="wpa3" data-t="wifi.wpa3"></option><option value="open" data-t="wifi.open"></option></select></label></div>
+<label id="psk-label"><span data-t="wifi.psk"></span><input id="psk" type="password" maxlength="64" autocomplete="off" spellcheck="false" aria-describedby="psk-error wifi-safety"><span class="field-error" id="psk-error" role="alert" hidden></span></label>
+<p class="hint safety" id="wifi-safety" data-t="wifi.safety"></p>
+<div class="actions"><button class="primary" type="submit" id="wifi-submit" data-t="wifi.submit"></button><button id="forget" type="button" class="danger" data-t="wifi.forget"></button></div></form></div>
+<div class="card" id="setup-ap-card"><h3 data-t="wifi.ap.title"></h3>
+<p class="state" id="setup-ap-state" role="status" hidden></p>
+<div id="setup-ap-body" hidden><div id="setup-ap-info"></div>
+<div class="actions"><button type="button" id="setup-ap-show" data-t="wifi.ap.show"></button><button type="button" id="setup-ap-hide" class="quiet" hidden data-t="wifi.ap.hide"></button></div>
+<form id="setup-ap-form" novalidate hidden>
+<label><span data-t="wifi.ap.password"></span><input id="setup-ap-password" type="password" autocomplete="current-password" maxlength="256" aria-describedby="setup-ap-password-error"><span class="field-error" id="setup-ap-password-error" role="alert" hidden></span></label>
+<button class="primary" type="submit" id="setup-ap-submit" data-t="wifi.ap.confirm"></button></form>
+<div id="setup-ap-secret" hidden><div class="row"><span data-t="wifi.ap.passphrase"></span><span class="mono" id="setup-ap-passphrase"></span></div></div>
+<p class="hint" id="setup-ap-note" role="status" aria-live="polite"></p></div>
+<p class="hint" data-t="wifi.ap.hint"></p></div></section>
+
+<section id="sms" class="page" hidden aria-labelledby="sms-h"><div class="section-heading"><h2 id="sms-h" tabindex="-1" data-t="sms.title"></h2><button type="button" id="sms-refresh" data-t="sms.refresh"></button></div>
+<div class="card" id="sms-card"><h3 data-t="sms.compose"></h3><div class="banner error" id="sms-block" role="alert" tabindex="-1" hidden><strong id="sms-block-title"></strong><p id="sms-block-text"></p><p id="sms-block-recover"></p><p id="sms-block-draft"></p><button type="button" id="sms-block-recheck" data-t="sms.block.recheck"></button></div><form id="sms-form" novalidate>
+<label><span data-t="sms.to"></span><input id="sms-number" type="tel" inputmode="tel" required maxlength="32" autocomplete="off" aria-describedby="sms-number-error"><span class="field-error" id="sms-number-error" role="alert" hidden></span></label>
+<label><span data-t="sms.text"></span><textarea id="sms-text" required rows="4" maxlength="4096" aria-describedby="sms-text-error sms-count"></textarea><span class="field-error" id="sms-text-error" role="alert" hidden></span></label>
+<p class="hint" id="sms-count"></p>
+<button class="primary" type="submit" id="sms-submit" data-t="sms.send"></button></form><p class="hint" data-t="sms.hint"></p></div>
+<p class="state" id="sms-state" role="status" hidden></p><div id="messages" class="messages"></div></section>
+
+<section id="security" class="page" hidden aria-labelledby="security-h"><div class="section-heading"><h2 id="security-h" tabindex="-1" data-t="security.title"></h2><span data-t="security.readOnly"></span></div>
+<p class="state" id="security-state" role="status" hidden></p>
+<div id="security-body" class="split-cards"></div><p class="hint" data-t="security.hint"></p></section>
+
+<section id="update" class="page" hidden aria-labelledby="update-h"><div class="section-heading"><h2 id="update-h" tabindex="-1" data-t="update.title"></h2><span data-t="update.readOnly"></span></div>
+<p class="state" id="update-state" role="status" hidden></p>
+<div class="card" id="update-card" hidden><div id="update-body"></div>
+<div id="update-progress-wrap" hidden><label for="update-progress" data-t="update.transfer"></label><progress id="update-progress" max="100" value="0"></progress><span id="update-progress-text" class="hint"></span></div>
+<div class="actions"><button type="button" id="rollback" class="danger" hidden data-t="update.rollback"></button></div>
+<p class="hint" id="rollback-help" hidden data-t="update.rollbackHelp"></p></div>
+<p class="hint" data-t="update.nasOnly"></p></section>
+
+<section id="diagnostics" class="page" hidden aria-labelledby="diag-h"><div class="section-heading"><h2 id="diag-h" tabindex="-1" data-t="diag.title"></h2><div class="actions"><button type="button" id="logs-refresh" data-t="diag.refresh"></button><button type="button" id="download-diag" data-t="diag.download"></button></div></div>
+<div class="card"><p class="hint" data-t="diag.hint"></p><p class="state" id="diagnostics-state" role="status" hidden></p><pre id="logs" tabindex="0" data-t-label="diag.logLabel"></pre></div></section>
+
+<section id="system" class="page" hidden aria-labelledby="system-h"><div class="section-heading"><h2 id="system-h" tabindex="-1" data-t="system.title"></h2></div>
+<p class="hint" data-t="system.hint"></p><p id="system-state" class="state" role="status"></p>
+<div class="split"><div class="card"><h3 data-t="system.ssh"></h3><form id="system-ssh-form">
+<label><span data-t="system.enabled"></span><input id="system-enabled" type="checkbox"></label>
+<label><span data-t="system.port"></span><input id="system-port" type="number" min="1024" max="65535" value="2222" required></label>
+<label><span data-t="system.passwordLogin"></span><input id="system-password-login" type="checkbox"></label>
+<label><span data-t="system.rootLogin"></span><input id="system-root-login" type="checkbox"></label>
+<label><span data-t="system.current"></span><input id="system-ssh-current" type="password" autocomplete="current-password" maxlength="256" required></label>
+<button id="system-ssh-submit" class="primary" type="submit" data-t="system.saveSSH"></button></form><p class="hint" id="system-fingerprint"></p></div>
+<div class="card"><h3 data-t="system.users"></h3><div id="system-users"></div>
+<form id="system-account-form"><label><span data-t="system.action"></span><select id="system-action">
+<option value="create" data-t="system.create"></option><option value="password" data-t="system.password"></option><option value="keys" data-t="system.keys"></option><option value="sudo" data-t="system.sudo"></option><option value="lock" data-t="system.lock"></option><option value="delete" data-t="system.delete"></option></select></label>
+<label><span data-t="system.user"></span><input id="system-user" required maxlength="31" pattern="[a-z][a-z0-9_-]{0,30}" autocomplete="off"></label>
+<div id="system-password-fields"><label><span data-t="system.newPassword"></span><input id="system-new-password" type="password" autocomplete="new-password" maxlength="256"></label><label><span data-t="system.confirm"></span><input id="system-confirm" type="password" autocomplete="new-password" maxlength="256"></label></div>
+<label id="system-key-field" hidden><span data-t="system.keyHelp"></span><textarea id="system-keys" rows="4" maxlength="5200" spellcheck="false"></textarea></label>
+<label id="system-toggle-field" hidden><span data-t="system.toggle"></span><input id="system-toggle" type="checkbox"></label>
+<label><span data-t="system.current"></span><input id="system-account-current" type="password" autocomplete="current-password" maxlength="256" required></label>
+<button id="system-account-submit" class="primary" type="submit" data-t="system.apply"></button></form></div></div></section>
+
+<section id="settings" class="page" hidden aria-labelledby="settings-h"><div class="section-heading"><h2 id="settings-h" tabindex="-1" data-t="settings.title"></h2><span data-t="settings.thisDevice"></span></div><div class="split"><div class="card"><h3 data-t="settings.changePassword"></h3><form id="password-form" novalidate>
+<label><span data-t="settings.oldPassword"></span><input id="old-password" type="password" required autocomplete="current-password" maxlength="256" aria-describedby="old-password-error"><span class="field-error" id="old-password-error" role="alert" hidden></span></label>
+<label><span data-t="settings.newPassword"></span><input id="new-password" type="password" required maxlength="256" autocomplete="new-password" aria-describedby="new-password-error"><span class="field-error" id="new-password-error" role="alert" hidden></span></label>
+<label><span data-t="settings.confirmPassword"></span><input id="confirm-password" type="password" required maxlength="256" autocomplete="new-password" aria-describedby="confirm-password-error"><span class="field-error" id="confirm-password-error" role="alert" hidden></span></label>
+<button class="primary" type="submit" id="password-submit" data-t="settings.savePassword"></button></form><p class="hint" data-t="settings.passwordHint"></p><p class="hint" id="session-policy"></p></div>
+<div class="card"><h3 data-t="settings.deviceAndSoftware"></h3><p class="state" id="settings-state" role="status" hidden></p><div id="device-info"></div><hr><h3 data-t="settings.maintenance"></h3><p class="description" data-t="settings.maintenance1"></p><p class="description" data-t="settings.maintenance2"></p><p class="hint" data-t="settings.edl"></p></div></div></section>
+
+</div><footer><span data-t="footer"></span> <span id="footer-id"></span></footer></main></div></body></html>

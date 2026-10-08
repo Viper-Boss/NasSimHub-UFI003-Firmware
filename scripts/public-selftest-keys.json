@@ -1,0 +1,19 @@
+{
+  "source": "https://raw.githubusercontent.com/gnutls/gnutls/3.8.9/lib/crypto-selftests-pk.c",
+  "source_sha256": "fce9355507865b53ba0b5c5587932b9d8519be2cd195650b0d9ff69ac2c335c7",
+  "reason": "Public GnuTLS 3.8.9 crypto known-answer selftests; exact DER SHA256 only. Any other key still fails.",
+  "der_sha256": [
+    "0294b4406902e33bb02f89eaf4c691328790d7a9cd01b873d68edac994f310a1",
+    "09416ba3e0782523c56225fb168cd58cda7796e938db1b53f79b6abbaed2bbc7",
+    "09f1c1a4680df80b9e8e6e587d3a787de7402a919e366426ad807a1c0f8c98c1",
+    "2859ff03b44c8f0e4f96604b8cced325ef4d01ca935422b2041d88d8809f8fa1",
+    "323a1e2a6917c0615aa5e0144ba9ea0b18553c671284f2b75ca5dde1308c477b",
+    "458022ddcb5598b39253bc027eb02c4f3dba00e2bdbaef239a35bc91c9bd4f3a",
+    "60c323abe4854b03743005874156ef6e0343bc9c05c09a2a43335cdda19342b3",
+    "7e38af7715bbb425a6aa8060b7c0af60aeb81d39975c55e83edcb9eae7a5e9f8",
+    "803fc9d7eb40ea13dc82723b2d99780ac1e0335ba0b65d660e66994c613ed422",
+    "87e288dc7dbc29a24241b596ec8c84f949d9f09f34fc0cf69242481fb2274770",
+    "995b8d5b08ac126a74f39d812fc8cce270d026093d810f366de923bb0fe47f60",
+    "d245e52c341a76645e1b0e56c58dc964cd4f3ecaea64a9c6d6db9897d4948a8a"
+  ]
+}

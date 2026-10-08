@@ -86,14 +86,14 @@ func (b *Backend) commandVoice(ctx context.Context, operation, id, flag string, 
 	if err := b.voiceEnabled(operation); err != nil {
 		return proto.CallReceipt{}, err
 	}
-	path, ok := callIDPath(id)
-	if !ok {
-		return proto.CallReceipt{}, proto.InvalidArgument(operation, "invalid call id")
+	path, service, err := b.resolveCallID(ctx, operation, id)
+	if err != nil {
+		return proto.CallReceipt{}, err
 	}
 	b.voiceMu.Lock()
 	defer b.voiceMu.Unlock()
 	if b.options.Run == nil && b.options.RunBusctl == nil {
-		return b.commandVoiceDBus(ctx, operation, id, path, incomingOnly)
+		return b.commandVoiceDBus(ctx, operation, id, path, service, incomingOnly)
 	}
 	calls, err := b.ListCalls(ctx)
 	if err != nil {

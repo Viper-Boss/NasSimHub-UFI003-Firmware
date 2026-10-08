@@ -1,0 +1,35 @@
+{
+  "comment": "REUSE-style path-to-licence mapping for files that carry no SPDX-License-Identifier header. It restates LICENSES/README.md in a form scripts/sbom.py can check; it does not change the licence of any file. A file's own SPDX header always takes precedence over a rule here, and the longest matching path wins. Checked by: python3 scripts/sbom.py spdx-coverage",
+  "rules": [
+    {
+      "path": "kernel/audio/",
+      "licence": "GPL-2.0-only",
+      "text": "LICENSES/GPL-2.0-only.txt",
+      "basis": "LICENSES/README.md: kernel/audio/** is GPL-2.0-only, except files carrying their own SPDX license expression"
+    },
+    {
+      "path": "node/",
+      "licence": "AGPL-3.0-only",
+      "text": "LICENSE",
+      "basis": "LICENSES/README.md: project-owned userspace code is AGPL-3.0-only (root LICENSE)"
+    },
+    {
+      "path": "scripts/",
+      "licence": "AGPL-3.0-only",
+      "text": "LICENSE",
+      "basis": "LICENSES/README.md: project-owned firmware integration is AGPL-3.0-only (root LICENSE)"
+    },
+    {
+      "path": "firmware/",
+      "licence": "AGPL-3.0-only",
+      "text": "LICENSE",
+      "basis": "LICENSES/README.md: project-owned firmware integration is AGPL-3.0-only (root LICENSE)"
+    },
+    {
+      "path": "docs/",
+      "licence": "AGPL-3.0-only",
+      "text": "LICENSE",
+      "basis": "LICENSES/README.md: project-owned documentation is AGPL-3.0-only (root LICENSE)"
+    }
+  ]
+}

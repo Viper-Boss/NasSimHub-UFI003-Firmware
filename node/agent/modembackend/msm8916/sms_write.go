@@ -234,8 +234,8 @@ func (b *Backend) deleteRealSMS(ctx context.Context, id string) error {
 		return proto.Unavailable(op, "SMS list is unavailable", err)
 	}
 	fields := parseKeyValues(listing)
-	count, err := strconv.Atoi(fields["modem.messaging.sms.length"])
-	if err != nil || count < 0 || count > 128 {
+	count, err := smsListCount(fields)
+	if err != nil {
 		return proto.Unavailable(op, "invalid SMS listing", nil)
 	}
 	targetPath := smsPathPrefix + strings.TrimPrefix(id, "mm-")

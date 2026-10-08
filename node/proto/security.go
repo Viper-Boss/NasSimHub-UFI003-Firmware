@@ -115,13 +115,29 @@ var (
 // Under PQRequired the classical groups are absent, and their absence is the
 // enforcement. Under PQPreferred they are appended, and a connection that ends
 // up using one is a connection the UI must describe as not post-quantum.
+//
+// The extreme profile, REQUIRED, offers SecP384r1MLKEM1024 and nothing else.
+// That combination is the PQ_EXTREME level, whose contract is that this one
+// group is required (RequiredGroupFor). It previously also listed the two
+// ML-KEM-768 hybrids "so a peer that cannot do 1024 still has 768", and the
+// effect was not the one intended: crypto/tls prefers a group the client
+// already sent a key share for, the client sends a share for X25519MLKEM768
+// whenever it is offered, and so two peers that both implemented 1024 settled
+// on 768 every time. A level named for the largest group was never using it,
+// and nothing said so. Listing only the required group makes the level mean
+// what it says: a peer that cannot do 1024 fails the handshake, visibly, which
+// is what "required" promises - and is the same enforcement-by-omission the
+// classical groups get above.
+//
+// The extreme profile under PREFERRED keeps its fallbacks. That combination is
+// not PQ_EXTREME (LevelFor maps it to STANDARD); it exists so a configuration
+// written before levels did still loads, and it promises nothing it must keep.
 func PQGroups(profile PQProfile, policy PQPolicy) []uint16 {
 	var groups []uint16
-	switch profile {
-	case PQExtreme:
-		// Largest first. A peer that can do 1024 should, and one that cannot
-		// still has 768 within the same profile rather than dropping to
-		// classical.
+	switch {
+	case profile == PQExtreme && policy == PQRequired:
+		groups = []uint16{GroupSecP384r1MLKEM1024}
+	case profile == PQExtreme:
 		groups = []uint16{GroupSecP384r1MLKEM1024, GroupX25519MLKEM768, GroupSecP256r1MLKEM768}
 	default:
 		groups = []uint16{GroupX25519MLKEM768}

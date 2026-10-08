@@ -5,9 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/human-agent65535/nassimhub-node/proto"
 	"io"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -58,10 +58,7 @@ func New(options Options) (*Opener, error) {
 }
 
 func (o *Opener) Open(ctx context.Context, callID string) (voicemedia.PCM, error) {
-	if !strings.HasPrefix(callID, "mm-") {
-		return nil, errors.New("invalid ModemManager call ID")
-	}
-	if _, err := strconv.ParseUint(strings.TrimPrefix(callID, "mm-"), 10, 32); err != nil {
+	if _, _, ok := proto.ParseMMCallID(callID); !ok {
 		return nil, errors.New("invalid ModemManager call ID")
 	}
 	for _, name := range controls {

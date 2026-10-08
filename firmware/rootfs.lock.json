@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "status": "unresolved - run build-rootfs.sh --lock on a networked build host",
+  "note": "Inputs of scripts/build-rootfs.sh. This file was written in an offline container: the snapshot timestamp, the package versions, the kernel artefact hashes, the service uid/gid and the partition size below are NOT known here and are null. `sh scripts/build-rootfs.sh --lock ...` fills them in on a networked Debian/Ubuntu build host (docs/ROOTFS-BUILD.md). Until then build-rootfs.sh refuses to produce a release input and only builds with --unlocked, which stamps its output as non-reproducible and non-release.",
+  "suite": "trixie",
+  "architecture": "arm64",
+  "variant": "important",
+  "variant_note": "mmdebstrap's name for what `debootstrap` installs by default (Essential, required and important packages). docs/INSTALL.md says the verified image was made with debootstrap; whether it used the default variant is NOT recorded anywhere in this repository - confirm against the verified image's package list (docs/ROOTFS-BUILD.md, step 2) before resolving.",
+  "components": [
+    "main"
+  ],
+  "snapshot": {
+    "timestamp": null,
+    "archive": "https://snapshot.debian.org/archive/debian/{timestamp}/",
+    "security_archive": "https://snapshot.debian.org/archive/debian-security/{timestamp}/",
+    "keyring": "/usr/share/keyrings/debian-archive-keyring.gpg",
+    "release_sha256": []
+  },
+  "source_date_epoch": null,
+  "packages": {
+    "requested": [
+      "alsa-utils",
+      "ca-certificates",
+      "libqmi-utils",
+      "modemmanager",
+      "network-manager",
+      "polkitd",
+      "qrtr-tools",
+      "rmtfs",
+      "systemd",
+      "systemd-timesyncd",
+      "wpasupplicant"
+    ],
+    "requested_note": "The names of firmware/debian-packages.json `base` (the list docs/INSTALL.md gives for the verified image); scripts/test_rootfs.py keeps the two in step. dnsmasq-base is added only by --setup-ap. See firmware/rootfs-dependencies.json for why each is there and for packages that are NOT in the verified list.",
+    "setup_access_point": false,
+    "versions": null,
+    "manifest_sha256": null,
+    "count": null
+  },
+  "service_user": {
+    "name": "nassimhub",
+    "uid": null,
+    "gid": null,
+    "note": "Fixed numeric ids, because files on the state partition (NSHSTATE) are owned by them and the first-boot script only re-owns the directory, not its contents. They MUST equal `id -u nassimhub` / `id -g nassimhub` on devices that already hold an identity; that value is not recorded in this repository."
+  },
+  "kernel": {
+    "release": "6.12.49-msm8916-g93a71ee9468d",
+    "boot_img_sha256": null,
+    "modules_sha256": null,
+    "note": "The verified kernel is not built here (firmware/upstream.lock.json names its source). The release engineer supplies the verified boot image and the matching modules archive; --lock records their SHA-256 and every later build checks them, reads the release string out of the kernel itself and refuses modules whose vermagic differs."
+  },
+  "image": {
+    "label": "rootfs",
+    "uuid": "6e736866-7566-6930-3033-726f6f746673",
+    "hash_seed": "6e736866-7566-6930-3033-686173687364",
+    "size_mib": null,
+    "note": "uuid and hash_seed are arbitrary constants so that two builds are identical; the boot command line selects the root filesystem by LABEL or PARTUUID, never by this UUID. size_mib is the size of the stick's rootfs partition: it is not documented in this repository, so it is a required parameter (--image-size-mib, read from the device's partition table)."
+  }
+}

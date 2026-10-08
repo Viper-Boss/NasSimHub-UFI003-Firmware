@@ -72,6 +72,9 @@ type Status struct {
 	SSID         string             `json:"ssid,omitempty"`
 	APSSID       string             `json:"ap_ssid,omitempty"`
 	Failure      string             `json:"failure_reason,omitempty"`
+	// ProvisioningState is the setup state machine's state, absent when the
+	// backend does not report one. It is a state name and nothing else.
+	ProvisioningState proto.WiFiProvisioningState `json:"provisioning_state,omitempty"`
 }
 
 // Network is one scan result, reduced to what a setup page needs.
@@ -79,11 +82,19 @@ type Network struct {
 	SSID      string             `json:"ssid"`
 	SignalDBM float64            `json:"signal_dbm"`
 	Security  proto.WiFiSecurity `json:"security"`
+	// Support says whether a network of this kind has been joined on this
+	// hardware; SupportReason says why not. A network is listed whatever the
+	// answer, and an absent value means the backend gave no hint.
+	Support       proto.WiFiSupport `json:"support,omitempty"`
+	SupportReason string            `json:"support_reason,omitempty"`
 }
 
 // ScanResult is the envelope for POST /provision/scan.
 type ScanResult struct {
 	Networks []Network `json:"networks"`
+	// FromCache is set when the radio could not scan while serving the access
+	// point and the list was taken before the access point started.
+	FromCache bool `json:"from_cache,omitempty"`
 }
 
 // ConnectRequest joins a network. The PSK travels inbound only and is never
@@ -191,6 +202,11 @@ func (h *Handler) guard(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		// Someone is on the setup page. A backend that would otherwise take
+		// the access point down to look for a lost network is told to wait.
+		if noter, ok := h.network.(netbackend.SetupActivityNoter); ok {
+			noter.NoteSetupActivity()
+		}
 		next(w, r)
 	}
 }
@@ -243,6 +259,8 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		SSID:         wifi.SSID,
 		APSSID:       wifi.APSSID,
 		Failure:      wifi.FailureReason,
+
+		ProvisioningState: wifi.ProvisioningState,
 	})
 }
 
@@ -260,9 +278,12 @@ func (h *Handler) scan(w http.ResponseWriter, r *http.Request) {
 			SSID:      network.SSID,
 			SignalDBM: network.SignalDBM,
 			Security:  network.Security,
+
+			Support:       network.Support,
+			SupportReason: network.SupportReason,
 		})
 	}
-	writeJSON(w, http.StatusOK, ScanResult{Networks: networks})
+	writeJSON(w, http.StatusOK, ScanResult{Networks: networks, FromCache: result.FromCache})
 }
 
 func (h *Handler) connect(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +342,9 @@ type Supervisor struct {
 	address  string
 	starts   int
 	stops    int
+	// listenFailure is the last reason the listener could not be opened, so
+	// the reason is logged when it changes and not on every poll.
+	listenFailure string
 }
 
 // NewSupervisor builds a supervisor. It does not listen until Run.
@@ -380,8 +404,18 @@ func (s *Supervisor) start() {
 	listener, err := net.Listen("tcp", s.options.Listen)
 	if err != nil {
 		// A device whose AP interface is not up yet simply retries next tick.
+		// A failure that stays - the address is not there, the port may not
+		// be bound by this user - would otherwise be an access point with no
+		// setup page behind it and nothing anywhere saying why.
+		if reason := err.Error(); reason != s.listenFailure {
+			s.listenFailure = reason
+			if s.options.Logf != nil {
+				s.options.Logf("provisioning: the access point is up but the setup page cannot listen on %s: %v", s.options.Listen, err)
+			}
+		}
 		return
 	}
+	s.listenFailure = ""
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	s.server = server
 	s.listener = listener

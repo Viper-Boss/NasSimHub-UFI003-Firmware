@@ -129,7 +129,7 @@ func TestConnectKeepsPSKOutOfArgumentsAndRemovesSecret(t *testing.T) {
 				t.Fatalf("password file is not a connection-up argument: %#v", call)
 			}
 		}
-		if joined == "connection delete id "+defaultProfile {
+		if joined == "connection delete id "+previousProfile {
 			deleteOldIndex = index
 		}
 	}
@@ -149,5 +149,123 @@ func TestConnectValidation(t *testing.T) {
 		if _, err := backend.Connect(context.Background(), request); proto.CodeOf(err) != proto.ErrorInvalidArgument {
 			t.Fatalf("request %#v: %v", request, err)
 		}
+	}
+}
+
+// connectAndWait runs one Connect to completion against a scripted nmcli and
+// returns every command it issued.
+func connectAndWait(t *testing.T, fail func(joined string) bool, request proto.WiFiConnectRequest) (*Backend, []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var calls []string
+	run := func(_ context.Context, arguments ...string) (string, error) {
+		joined := strings.Join(arguments, " ")
+		mu.Lock()
+		calls = append(calls, joined)
+		mu.Unlock()
+		if fail(joined) {
+			return "", errors.New("scripted failure")
+		}
+		return "", nil
+	}
+	backend := New(Options{StateDir: t.TempDir(), Run: run})
+	if _, err := backend.Connect(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		backend.mu.Lock()
+		settled := backend.state != proto.WiFiConnecting
+		backend.mu.Unlock()
+		if settled {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("connect did not settle")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return backend, append([]string(nil), calls...)
+}
+
+func indexOf(calls []string, match func(string) bool) int {
+	for index, call := range calls {
+		if match(call) {
+			return index
+		}
+	}
+	return -1
+}
+
+func TestFailedJoinKeepsTheSavedNetworkAndRejoinsIt(t *testing.T) {
+	request := proto.WiFiConnectRequest{SSID: "New", PSK: "wrong-passphrase", Security: proto.WiFiSecurityWPA2}
+	backend, calls := connectAndWait(t, func(joined string) bool {
+		return strings.Contains(joined, "connection up id nsh-agent-")
+	}, request)
+	backend.mu.Lock()
+	state, failure := backend.state, backend.failure
+	backend.mu.Unlock()
+	if state != proto.WiFiFailed || failure == "" {
+		t.Fatalf("state after a failed join: %s %q", state, failure)
+	}
+	for _, call := range calls {
+		if call == "connection delete id "+defaultProfile || strings.Contains(call, "connection.id "+previousProfile) {
+			t.Fatalf("a failed join touched the saved network: %q", call)
+		}
+	}
+	failed := indexOf(calls, func(c string) bool { return strings.Contains(c, "connection up id nsh-agent-") })
+	removed := indexOf(calls, func(c string) bool { return strings.HasPrefix(c, "connection delete id nsh-agent-") })
+	rejoin := indexOf(calls, func(c string) bool { return strings.Contains(c, "connection up id "+defaultProfile) })
+	if failed < 0 || removed < failed || rejoin < removed {
+		t.Fatalf("the temporary profile must be removed and the saved network rejoined: %#v", calls)
+	}
+}
+
+func TestSuccessfulJoinNeverLeavesTheDeviceWithoutASavedNetwork(t *testing.T) {
+	request := proto.WiFiConnectRequest{SSID: "New", PSK: "correct-passphrase", Security: proto.WiFiSecurityWPA2}
+	_, calls := connectAndWait(t, func(string) bool { return false }, request)
+	aside := indexOf(calls, func(c string) bool {
+		return c == "connection modify id "+defaultProfile+" connection.id "+previousProfile
+	})
+	renamed := indexOf(calls, func(c string) bool {
+		return strings.HasPrefix(c, "connection modify id nsh-agent-") && strings.HasSuffix(c, "connection.id "+defaultProfile)
+	})
+	dropped := indexOf(calls, func(c string) bool { return c == "connection delete id "+previousProfile })
+	if aside < 0 || renamed < aside || dropped < renamed {
+		t.Fatalf("old profile must be set aside, then replaced, then deleted: %#v", calls)
+	}
+	if indexOf(calls, func(c string) bool { return c == "connection delete id "+defaultProfile }) >= 0 {
+		t.Fatalf("the saved network must never be deleted outright: %#v", calls)
+	}
+
+	// The rename of the new profile fails: the old one gets its name back and
+	// is brought up again, and is not deleted.
+	backend, calls := connectAndWait(t, func(joined string) bool {
+		return strings.HasPrefix(joined, "connection modify id nsh-agent-") && strings.HasSuffix(joined, "connection.id "+defaultProfile)
+	}, request)
+	backend.mu.Lock()
+	state := backend.state
+	backend.mu.Unlock()
+	back := indexOf(calls, func(c string) bool {
+		return c == "connection modify id "+previousProfile+" connection.id "+defaultProfile
+	})
+	rejoin := indexOf(calls, func(c string) bool { return strings.Contains(c, "connection up id "+defaultProfile) })
+	if state != proto.WiFiFailed || back < 0 || rejoin < back {
+		t.Fatalf("a failed save must put the previous network back: %s %#v", state, calls)
+	}
+	if indexOf(calls, func(c string) bool { return c == "connection delete id "+previousProfile }) >= 0 {
+		t.Fatalf("the previous network was deleted although the new one was not saved: %#v", calls)
+	}
+}
+
+func TestRawWPA2KeyIsAcceptedOnlyAsSixtyFourHexDigitsAndNeverForSAE(t *testing.T) {
+	hexKey := strings.Repeat("0123456789abcdef", 4)
+	if !validPSK(hexKey, proto.WiFiSecurityWPA2) || validPSK(hexKey, proto.WiFiSecurityWPA3) {
+		t.Fatal("a 64-digit hexadecimal key is a WPA2 form only")
+	}
+	if validPSK(strings.Repeat("z", 64), proto.WiFiSecurityWPA2) || validPSK(strings.Repeat("a", 65), proto.WiFiSecurityWPA2) || validPSK("short", proto.WiFiSecurityWPA2) {
+		t.Fatal("only 8-63 characters or 64 hexadecimal digits are a key")
 	}
 }

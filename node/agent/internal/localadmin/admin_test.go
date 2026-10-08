@@ -98,7 +98,7 @@ func TestManagementAuthenticationOriginAndCSRF(t *testing.T) {
 		csrf, origin string
 		want         int
 	}{{nil, "", "https://device.test", 401}, {c, "", "https://device.test", 403}, {c, csrf, "https://evil.test", 403}, {c, csrf, "", 403}, {c, csrf, "https://device.test.evil", 403}, {c, csrf, "https://device.test", 204}} {
-		w := call(t, h, "/admin/api/v1/wifi/connect", "POST", nil, tc.cookie, tc.csrf, tc.origin)
+		w := call(t, h, "/admin/api/v1/wifi/scan", "POST", nil, tc.cookie, tc.csrf, tc.origin)
 		if w.Code != tc.want {
 			t.Fatalf("got %d want %d", w.Code, tc.want)
 		}
@@ -141,7 +141,7 @@ func TestSetupRateLimitExpiryAndCorruptState(t *testing.T) {
 	}
 	now = now.Add(time.Minute)
 	h, c, _ := login(t, a, "long-enough-password")
-	now = now.Add(lifetime)
+	now = now.Add(idleLifetime)
 	if w := call(t, h, "/admin/api/v1/status", "GET", nil, c, "", ""); w.Code != 401 {
 		t.Fatal("expired session accepted")
 	}

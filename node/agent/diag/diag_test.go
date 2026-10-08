@@ -26,8 +26,8 @@ import (
 const (
 	secretICCID    = "89860412345678901234"
 	secretIMSI     = "460001234567890"
-	secretPhone    = "+8613800138000"
-	secretPeer     = "+8613900139000"
+	secretPhone    = "+8610000000001"
+	secretPeer     = "+8610000000010"
 	secretSMSBody  = "your verification code is 493127"
 	secretCode     = "493127"
 	secretToken    = "eyJhbGciOiJFZDI1NTE5In0.dGVzdA.c2lnbmF0dXJl"

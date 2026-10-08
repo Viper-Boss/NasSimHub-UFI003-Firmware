@@ -29,8 +29,8 @@ func (b *Backend) listReadOnlySMS(ctx context.Context) ([]proto.SMS, error) {
 		return nil, proto.Unavailable("list_sms", "cannot list modem messages", err)
 	}
 	fields := parseKeyValues(listed)
-	count, err := strconv.Atoi(fields["modem.messaging.sms.length"])
-	if err != nil || count < 0 || count > 128 {
+	count, err := smsListCount(fields)
+	if err != nil {
 		return nil, proto.Unavailable("list_sms", "invalid or excessive SMS listing", nil)
 	}
 	if count == 0 {
@@ -73,6 +73,21 @@ func (b *Backend) listReadOnlySMS(ctx context.Context) ([]proto.SMS, error) {
 		messages = append(messages, message)
 	}
 	return messages, nil
+}
+
+// ModemManager emits a scalar zero for an empty list, rather than .length.
+// Only that exact empty form is accepted; missing or malformed output is not
+// treated as an empty inbox.
+func smsListCount(fields map[string]string) (int, error) {
+	value, present := fields["modem.messaging.sms.length"]
+	if !present && fields["modem.messaging.sms"] == "0" {
+		return 0, nil
+	}
+	count, err := strconv.Atoi(value)
+	if err != nil || count < 0 || count > 128 {
+		return 0, strconv.ErrSyntax
+	}
+	return count, nil
 }
 
 type smsDuplicateKey struct {

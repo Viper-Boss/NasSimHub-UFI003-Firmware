@@ -150,6 +150,11 @@ func (b *Backend) readOnlyStatus(ctx context.Context) proto.ModemStatus {
 			status.SIM.OperatorCode = printableValue(simFields["sim.properties.operator-code"])
 		}
 	}
+	if status.SIM.PhoneNumber == "" && status.SIM.State == proto.SIMReady && status.SIM.ICCID != "" && b.options.ReadOwnNumber != nil {
+		if number, err := b.options.ReadOwnNumber(status.SIM.ICCID); err == nil {
+			status.SIM.PhoneNumber = number
+		}
+	}
 	return status
 }
 

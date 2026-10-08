@@ -54,7 +54,7 @@ func TestVoiceDialCreatesAndStartsOneCall(t *testing.T) {
 	if err := os.WriteFile(marker, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	backend := New(Options{ReadOnly: true, VoiceWrite: true, IMSProfilePath: marker, RunQMI: func(context.Context) (string, error) {
+	backend := New(Options{ReadOnly: true, VoiceWrite: true, CallEpoch: func(context.Context) (string, error) { return modemCallEpoch("boot", "bus", ":1.2"), nil }, IMSProfilePath: marker, RunQMI: func(context.Context) (string, error) {
 		return "IMS registration:\n Status: 'registered'\nVoice service\n Status: 'available'\n", nil
 	}, Run: func(_ context.Context, args ...string) (string, error) {
 		command := strings.Join(args, " ")
@@ -74,7 +74,7 @@ func TestVoiceDialCreatesAndStartsOneCall(t *testing.T) {
 		}
 	}})
 	receipt, err := backend.Dial(context.Background(), proto.DialRequest{RequestID: "r1", To: "10000"})
-	if err != nil || receipt.CallID != "mm-7" || receipt.State != proto.CallDialing || receipt.RequestID != "r1" {
+	if err != nil || receipt.CallID != scopeCallID(modemCallEpoch("boot", "bus", ":1.2"), "mm-7") || receipt.State != proto.CallDialing || receipt.RequestID != "r1" {
 		t.Fatalf("receipt = %+v, error = %v", receipt, err)
 	}
 	want := []string{"-K -L", "-K -m " + modem + " --voice-list-calls", "-K -L", "-m " + modem + " --voice-create-call=number=10000", "-o " + call + " --start"}

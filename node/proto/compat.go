@@ -52,7 +52,21 @@ const (
 	//	     serve the endpoint answers 404, which the Core reports as "weak
 	//	     network transport unavailable on this device" rather than as a
 	//	     failure.
-	ProtocolMinor = 2
+	//	1.3  POST /v1/identity/attest (dual-signed live identity); the pair
+	//	     request gained core_pq and signed requests gained an optional
+	//	     post-quantum signature header; GET/POST /v1/ota/* for the agent
+	//	     update lifecycle. All additive: an older Node answers the new
+	//	     endpoints with 404 and ignores the new field and header, and the
+	//	     Core reports the result as classical-only or as "update not
+	//	     supported on this device".
+	//	1.4  POST /v1/trust/policy and GET /v1/trust: the device enforces a
+	//	     trust policy its paired Core signed (trustpolicy.go). Additive: an
+	//	     older Core never calls them and nothing changes for it; an older
+	//	     Node answers 404 and the Core reports "this device does not
+	//	     enforce". The identity document itself gained no field.
+	// 1.5 adds optional dtmf capability and POST /v1/calls/{id}/dtmf.
+	// Missing capability on an older Node means unsupported, never host fallback.
+	ProtocolMinor = 5
 )
 
 // MinCoreVersion is the oldest NasSimHub Core this agent build will talk to.

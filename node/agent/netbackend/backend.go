@@ -25,6 +25,12 @@ import (
 //     window the Node returns to PROVISIONING_AP on its own.
 //   - Forget clears the saved network and returns to PROVISIONING_AP.
 //
+// On a device with one radio the same contract is spelled out, edge by edge,
+// in statemachine.go: the access point and the client role take turns, a lost
+// saved network is kept while the access point is offered beside it, and an
+// access point that cannot be started is a visible state (AP_FAILED) rather
+// than a silent absence. The USB link is the way in that none of this touches.
+//
 // That last property is why no recovery gesture is bound to the UFI003 power
 // button: the software path always leads back to a reachable access point, so
 // the button never needs to, and the button's existing long-press behaviour

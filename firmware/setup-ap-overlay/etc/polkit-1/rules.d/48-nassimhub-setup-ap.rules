@@ -1,0 +1,19 @@
+// Installed by scripts/package-factory.sh ONLY with NSH_SETUP_AP=on.
+//
+// The setup access point (node/agent/netbackend/networkmanager/setupap.go) is a
+// NetworkManager profile with `ipv4.method shared` and WPA2-PSK. Activating a
+// shared Wi-Fi profile is authorized by NetworkManager with one action more
+// than an ordinary activation: wifi.share.protected for a profile that has
+// wireless security, wifi.share.open for one that has none. The base rule
+// (49-nassimhub-networkmanager.rules) grants neither.
+//
+// This grants the protected one and nothing else. wifi.share.open is
+// deliberately absent: the agent never creates an open access point, and
+// without the grant NetworkManager would refuse one even if it tried.
+//
+// Not yet verified on hardware; see docs/VALIDATION.md.
+polkit.addRule(function(action, subject) {
+    if (subject.user === "nassimhub" && action.id === "org.freedesktop.NetworkManager.wifi.share.protected") {
+        return polkit.Result.YES;
+    }
+});

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 // Hybrid post-quantum IDENTITY: the schema, the transcript, and the rule that
@@ -17,10 +18,11 @@ import (
 // never be one written here: a lattice signature scheme implemented by this
 // project would be a second unreviewed cryptographic implementation in a
 // codebase whose entire security argument is that it implements no primitives.
-// ML-DSA arrives through crypto/tls and crypto/x509, expected in
-// GoVersionForMLDSA. Until then this file is schema, interface, and the tests
-// that pin the rules - which is the part that has to be right before the
-// primitive shows up, not after.
+// ML-DSA comes from the Go standard library (crypto/mldsa, from
+// GoVersionForMLDSA) through pqmldsa_go127.go, which only adapts it to the
+// interfaces below. A build with an older toolchain has no provider and says
+// so. This file is the schema, the interface and the rules, and it is the same
+// on every toolchain.
 //
 // # What stays exactly as it is
 //
@@ -253,8 +255,8 @@ func (d DualSignature) HasPQ() bool { return d.PQ != "" && d.PQAlgorithm != "" }
 // The verifier
 // ---------------------------------------------------------------------------
 
-// PQSigner produces post-quantum signatures. A real implementation wraps the
-// standard library; this product provides none.
+// PQSigner produces post-quantum signatures. The real implementation wraps the
+// standard library (MLDSASigner); this product implements no primitive.
 type PQSigner interface {
 	Algorithm() PQSignatureAlgorithm
 	PublicKey() []byte
@@ -273,31 +275,40 @@ type PQVerifier interface {
 // toolchain is one registration at start-up and touches none of the call sites
 // that enforce policy. Nothing is registered by default: a build with no
 // provider reports the capability as unavailable, which is the truth.
+var pqRegistryMu sync.RWMutex
+
 var pqProvider func(PQSignatureAlgorithm) (PQVerifier, bool)
 
 // RegisterPQProvider installs the post-quantum verifier source.
 //
-// It is called once at start-up, by the build that has a real implementation.
-// It is deliberately not safe to call concurrently with verification: a
-// provider that can change while requests are in flight is a provider that can
-// be swapped by a bug in one goroutine while another is relying on it.
+// Configure the provider at start-up. Reads and registration are synchronized
+// so diagnostics and verification can safely run while initialization completes.
 func RegisterPQProvider(provider func(PQSignatureAlgorithm) (PQVerifier, bool)) {
+	pqRegistryMu.Lock()
+	defer pqRegistryMu.Unlock()
 	pqProvider = provider
 }
 
 // PQIdentityAvailable reports whether this build can verify post-quantum
 // signatures at all.
-func PQIdentityAvailable() bool { return pqProvider != nil }
+func PQIdentityAvailable() bool {
+	pqRegistryMu.RLock()
+	defer pqRegistryMu.RUnlock()
+	return pqProvider != nil
+}
 
 // PQVerifierFor returns the verifier for an algorithm.
 func PQVerifierFor(algorithm PQSignatureAlgorithm) (PQVerifier, error) {
 	if err := ValidatePQSignatureAlgorithm(algorithm); err != nil {
 		return nil, err
 	}
-	if pqProvider == nil {
+	pqRegistryMu.RLock()
+	provider := pqProvider
+	pqRegistryMu.RUnlock()
+	if provider == nil {
 		return nil, ErrPQIdentityUnavailable
 	}
-	verifier, ok := pqProvider(algorithm)
+	verifier, ok := provider(algorithm)
 	if !ok {
 		return nil, fmt.Errorf("%w: no verifier for %s", ErrPQIdentityUnavailable, algorithm)
 	}
@@ -482,6 +493,8 @@ var pqBackendName = "none"
 
 // PQBackendName reports where post-quantum verification comes from.
 func PQBackendName() string {
+	pqRegistryMu.RLock()
+	defer pqRegistryMu.RUnlock()
 	if pqProvider == nil {
 		return "none"
 	}
@@ -490,4 +503,8 @@ func PQBackendName() string {
 
 // SetPQBackendName records the provider's name. It is called by whatever calls
 // RegisterPQProvider.
-func SetPQBackendName(name string) { pqBackendName = name }
+func SetPQBackendName(name string) {
+	pqRegistryMu.Lock()
+	defer pqRegistryMu.Unlock()
+	pqBackendName = name
+}

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/human-agent65535/nassimhub-node/agent/netbackend"
 	"github.com/human-agent65535/nassimhub-node/proto"
 )
 
@@ -210,6 +211,13 @@ func (b *Backend) Scan(context.Context) (proto.WiFiScanResult, error) {
 	b.advanceLocked()
 	networks := make([]proto.WiFiNetwork, len(b.visible))
 	copy(networks, b.visible)
+	for index := range networks {
+		// The same evidence-based hint the hardware backend gives, so the
+		// pages built against the mock show the marks they will show for real.
+		if networks[index].Support == "" {
+			networks[index].Support, networks[index].SupportReason = netbackend.SupportFor(networks[index].Security, networks[index].Channel, false)
+		}
+	}
 	return proto.WiFiScanResult{Networks: networks, ScannedAt: b.now().UTC()}, nil
 }
 

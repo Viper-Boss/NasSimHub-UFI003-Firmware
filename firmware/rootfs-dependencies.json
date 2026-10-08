@@ -1,0 +1,117 @@
+{
+  "note": "Why each Debian package is in the rootfs, and which statements are backed by this repository. `verified_image_list: true` means docs/INSTALL.md names the package for the image that runs on hardware; it does NOT mean this build was booted. Everything else is marked `unverified - not in the verified image list` and is NOT installed by scripts/build-rootfs.sh unless the operator moves it into firmware/debian-packages.json (and docs/INSTALL.md) after checking the verified image. Package relationships (Depends/Recommends, priorities) are stated from knowledge of Debian packaging and were not checked against Debian 13 control files in the offline container that wrote this file; the resolved lock's version list is the evidence of what a bootstrap really installs.",
+  "bootstrap": {
+    "tool": "mmdebstrap (preferred), --variant from firmware/rootfs.lock.json",
+    "recommends": "not installed (mmdebstrap default; debootstrap behaves the same)",
+    "archive": "snapshot.debian.org at the locked timestamp, suite and suite-security, component main only",
+    "non_free_firmware": "not enabled: no firmware is taken from Debian by this build"
+  },
+  "installed": [
+    {
+      "package": "systemd-timesyncd",
+      "verified_image_list": true,
+      "why": "network time synchronization; hardware boot testing found that an unsynchronized device clock causes paired NAS authentication to reject request timestamps"
+    },
+    {
+      "package": "systemd",
+      "verified_image_list": true,
+      "why": "init system and service manager; the agent, the persistent-state mount, the first-boot check and the USB gadget are systemd units (firmware/overlay)"
+    },
+    {
+      "package": "ca-certificates",
+      "verified_image_list": true,
+      "why": "TLS trust store for outgoing HTTPS (update_url, when configured)"
+    },
+    {
+      "package": "network-manager",
+      "verified_image_list": true,
+      "why": "Wi-Fi client and the USB NCM address; the agent drives it through nmcli (node/agent/netbackend/networkmanager) under the polkit rules in firmware/overlay"
+    },
+    {
+      "package": "wpasupplicant",
+      "verified_image_list": true,
+      "why": "WPA2/WPA3 supplicant NetworkManager uses for Wi-Fi"
+    },
+    {
+      "package": "modemmanager",
+      "verified_image_list": true,
+      "why": "modem control: SMS, calls, signal; the agent talks to it over D-Bus and mmcli (node/agent/modembackend/msm8916)"
+    },
+    {
+      "package": "libqmi-utils",
+      "verified_image_list": true,
+      "why": "qmicli, used by the optional IMS and radio status probes (node/deploy/audio/query-ims-status, query-radio-status)"
+    },
+    {
+      "package": "qrtr-tools",
+      "verified_image_list": true,
+      "why": "Qualcomm IPC router name service (qrtr-ns/qrtr-lookup) for the modem on a mainline kernel"
+    },
+    {
+      "package": "rmtfs",
+      "verified_image_list": true,
+      "why": "remote filesystem service the modem needs to read its EFS partitions on a mainline kernel. It READS modemst1/modemst2/fsg on the device; none of that data is in the image"
+    },
+    {
+      "package": "alsa-utils",
+      "verified_image_list": true,
+      "why": "amixer/aplay/arecord for the q6voice call audio path (voice is per-device and optional)"
+    },
+    {
+      "package": "polkitd",
+      "verified_image_list": true,
+      "why": "Explicit runtime dependency for the NetworkManager and ModemManager authorization rules. Verified installed on the working Debian 13 device (126-2); do not rely on optional recommends."
+    }
+  ],
+  "setup_access_point_only": [
+    {
+      "package": "dnsmasq-base",
+      "verified_image_list": false,
+      "status": "documented requirement of NSH_SETUP_AP=on (firmware/debian-packages.json); the setup access point itself is not verified on hardware",
+      "why": "NetworkManager's shared mode starts the dnsmasq binary to hand the joining phone an address"
+    }
+  ],
+  "not_installed": [
+    {
+      "package": "libmbim-utils",
+      "status": "unverified - not in the verified image list",
+      "why": "mbimcli; the agent and the probes use QMI, not MBIM. A library libmbim-glib may still be pulled in as a dependency of modemmanager"
+    },
+    {
+      "package": "protection-domain-mapper",
+      "status": "unverified - not in the verified image list",
+      "why": "pd-mapper is needed on some Qualcomm SoCs whose modem uses protection domains; nothing in this repository says the MSM8916 stick needs or runs it"
+    },
+    {
+      "package": "tqftpserv",
+      "status": "unverified - not in the verified image list",
+      "why": "TFTP-over-QRTR server some Qualcomm modems use to fetch files; nothing in this repository says the verified image runs it"
+    },
+    {
+      "package": "dnsmasq",
+      "status": "must not be installed",
+      "why": "the full package adds a system-wide DNS/DHCP service; only dnsmasq-base is wanted, and only with the setup access point"
+    },
+    {
+      "package": "openssh-server",
+      "status": "unverified - not in the verified image list",
+      "why": "no SSH server is part of the documented image; an image that ships one must generate host keys on the device (none are in the image)"
+    },
+    {
+      "package": "firmware-* (non-free-firmware)",
+      "status": "never taken from Debian by this build",
+      "why": "see `firmware` below"
+    }
+  ],
+  "kernel": {
+    "source": "firmware/upstream.lock.json (KyonLi/ufi003-kernel 6.12.49-1); not built, not downloaded and not modified by scripts/build-rootfs.sh",
+    "inputs": "--boot-img (Android v0 boot image as the board boots it) and --modules (directory or tar holding lib/modules/<release>), both supplied by the operator and pinned by SHA-256 in firmware/rootfs.lock.json",
+    "checks": "the release string is read from the kernel's own banner; every module's vermagic must start with it; modules.dep must be present"
+  },
+  "firmware": {
+    "policy": "Modem and Wi-Fi/Bluetooth firmware for the stick is the vendor's. It is not redistributable by this project (NOTICE.md, LICENSES/README.md), is never in the repository and is never downloaded by a script. scripts/build-rootfs.sh copies it only from a directory the operator supplies (--firmware-dir) and lists every copied file with its SHA-256 in ROOTFS-MANIFEST.json; a package built from such a rootfs says so and must not be published by this project.",
+    "device_model_specific_allowed": "files that are identical on every unit of the board model (modem and WCNSS firmware images as shipped on the device's firmware partitions). Whether a given file really is identical across units is the operator's check (compare SHA-256 from two units); this repository does not hold such a list and names no file",
+    "device_unique_refused": "anything unique to one unit: modemst1, modemst2, fsg, fsc, persist (and files exported from them), *.qcn, *.xqcn, *.efs, *.nvm. Refused by name by scripts/genericrules.py - the same rule scripts/audit-rootfs.py applies to the whole tree - and never to be worked around by renaming",
+    "how_the_verified_image_gets_firmware": "r134 read-only device inspection: the working system has modem.mdt, modem.b* and WCNSS firmware in /usr/lib/firmware. The GPT has no standalone modem firmware partition; do not assume a fresh Debian rootfs can reload firmware from one. These files are not included in the generic build. The device owner must preserve/provide its authorized firmware and calibration privately before replacing rootfs."
+  }
+}

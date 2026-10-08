@@ -1,0 +1,29 @@
+#!/bin/sh
+# Resume only the two UFI003 remoteprocs that failed before owner firmware loaded.
+set -eu
+bundle=/var/lib/nassimhub/.private-firmware
+sys=/sys/class/remoteproc
+test -e "$bundle" || exit 0
+/usr/local/libexec/nassimhub-device-firmware --check
+(cd /usr/lib/firmware && sha256sum --status -c "$bundle/SHA256SUMS")
+found=0
+for p in "$sys"/*; do
+ test -d "$p" || continue
+ name=$(cat "$p/name")
+ case "$name" in 4080000.remoteproc|a204000.remoteproc) ;; *) continue;; esac
+ found=$((found + 1))
+ state=$(cat "$p/state")
+ case "$state" in
+  running) continue;;
+  offline) printf start > "$p/state";;
+  *) echo "radio resume: $name state $state requires manual review" >&2; exit 1;;
+ esac
+ left=30
+ while [ "$(cat "$p/state")" != running ]; do
+  left=$((left - 1))
+  test "$left" -gt 0 || { echo "radio resume: $name did not start" >&2; exit 1; }
+  sleep 1
+ done
+ echo "radio resume: $name running"
+done
+test "$found" -eq 2 || { echo 'radio resume: expected UFI003 processors not present' >&2; exit 1; }

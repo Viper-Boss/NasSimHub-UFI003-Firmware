@@ -1,0 +1,31 @@
+[Unit]
+Description=NasSimHub bounded local account and SSH administration
+After=local-fs.target
+
+[Service]
+Type=exec
+User=root
+Group=root
+ExecStart=/usr/lib/nassimhub/nassimhub-system-admin
+RuntimeDirectory=nassimhub-system-admin
+RuntimeDirectoryMode=0755
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=no
+ReadWritePaths=/etc /home /run
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryMax=48M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

@@ -52,6 +52,7 @@ type Config struct {
 	QMIDevice     string
 	AudioCard     string
 	VoiceMedia    bool
+	VoiceDTMF     bool
 	Plaintext     bool
 	Announce      bool
 	LocalAdmin    bool
@@ -60,6 +61,17 @@ type Config struct {
 	SessionTTL    time.Duration
 	UpdateURL     string
 	UpdateChannel string
+	// Updates enables the agent update mechanism. Off means the agent in the
+	// system image always runs and nothing can be installed.
+	Updates bool
+	// OTAKeys is the file holding the release PUBLIC keys this device trusts.
+	// A missing file means no publisher is trusted and updates are reported
+	// as unavailable.
+	OTAKeys string
+
+	// ProvisioningAP is whether the device may turn its one Wi-Fi radio into
+	// the setup access point: auto or off. See deploy/nassimhub-agent.conf.
+	ProvisioningAP string
 
 	// Security and transport. These are the settings an operator changes when
 	// something is wrong with the link or the policy, which is why they are in
@@ -77,6 +89,11 @@ type Config struct {
 	// questions - a device can have post-quantum confidentiality today and
 	// post-quantum identity only when ML-DSA arrives.
 	PQIdentityPolicy string
+	// PQIdentity is whether the device holds its own post-quantum identity
+	// key. On by default: on a build without ML-DSA it changes nothing, and
+	// on a build with it the key is additional to the Ed25519 identity and
+	// never affects device_id. Turning it off does not delete a stored key.
+	PQIdentity bool
 	// OTASignaturePolicy is whether an update must carry both signatures.
 	OTASignaturePolicy string
 	TransportMode      string
@@ -101,6 +118,15 @@ func Default() Config {
 		AdminListen:   "0.0.0.0:7581",
 		SessionTTL:    0,
 		UpdateChannel: "stable",
+		Updates:       true,
+		OTAKeys:       "/etc/nassimhub/ota-keys.json",
+		// auto: a device with no network it can reach offers a way in over
+		// Wi-Fi. Whether this radio can be an access point is only known on
+		// the hardware; a failure is reported and USB is unaffected.
+		// Off until the access point has been seen working on the hardware:
+		// an agent update must not make a stick that is in service start
+		// trying to broadcast a network. The image config opts in.
+		ProvisioningAP: "off",
 		// Post-quantum preferred rather than required, on the device side.
 		// A Node that REQUIRED it would become unreachable from an older NAS
 		// the moment it was updated, and a device the owner cannot reach is a
@@ -109,11 +135,13 @@ func Default() Config {
 		SecurityLevel: string(proto.LevelStandard),
 		PQProfile:     "pq_standard",
 		PQPolicy:      "preferred",
-		// Optional and preferred are the only defaults that work today: no
-		// build can produce an ML-DSA identity or a dual-signed manifest, so
-		// anything stricter would refuse every peer and every update. A
-		// deployment that wants strictness chooses PQ_EXTREME deliberately.
+		// Optional and preferred are the defaults that keep an updated device
+		// reachable from an older Core and able to install a release from an
+		// older publisher. A deployment that wants strictness chooses
+		// PQ_EXTREME deliberately. Whatever the policy, a post-quantum key
+		// that has been pinned for a peer stays mandatory for that peer.
 		PQIdentityPolicy:   string(proto.PQIdentityOptional),
+		PQIdentity:         true,
 		OTASignaturePolicy: string(proto.OTASignaturePreferred),
 		// Standard transport. KCP is opt-in: it costs bandwidth and it is only
 		// worth it on a link that is actually losing packets.
@@ -204,10 +232,16 @@ func assign(config *Config, key, value string) error {
 		config.AudioCard = value
 	case "voice_media":
 		return assignBool(&config.VoiceMedia, key, value)
+	case "voice_dtmf":
+		return assignBool(&config.VoiceDTMF, key, value)
 	case "update_url":
 		config.UpdateURL = value
 	case "update_channel":
 		config.UpdateChannel = value
+	case "updates":
+		return assignBool(&config.Updates, key, value)
+	case "ota_keys":
+		config.OTAKeys = value
 	case "security_level":
 		config.SecurityLevel = value
 	case "pq_profile":
@@ -216,6 +250,8 @@ func assign(config *Config, key, value string) error {
 		config.PQPolicy = value
 	case "pq_identity_policy":
 		config.PQIdentityPolicy = value
+	case "pq_identity":
+		return assignBool(&config.PQIdentity, key, value)
 	case "ota_signature_policy":
 		config.OTASignaturePolicy = value
 	case "transport_mode":
@@ -234,6 +270,8 @@ func assign(config *Config, key, value string) error {
 		return assignBool(&config.LocalAdmin, key, value)
 	case "provisioning":
 		return assignBool(&config.Provisioning, key, value)
+	case "provisioning_ap":
+		config.ProvisioningAP = strings.ToLower(value)
 	case "session_ttl":
 		duration, err := time.ParseDuration(value)
 		if err != nil {
@@ -277,10 +315,18 @@ func Validate(config Config) error {
 	if config.VoiceMedia && (config.ModemBackend != "msm8916" || config.Plaintext) {
 		return fmt.Errorf("voice_media requires msm8916 backend and TLS")
 	}
+	if config.VoiceDTMF && !config.VoiceMedia {
+		return fmt.Errorf("voice_dtmf requires voice_media")
+	}
 	switch config.Platform {
 	case "msm8916", "mock":
 	default:
 		return fmt.Errorf("platform %q is not msm8916 or mock", config.Platform)
+	}
+	switch config.ProvisioningAP {
+	case "auto", "off":
+	default:
+		return fmt.Errorf("provisioning_ap %q is not auto or off", config.ProvisioningAP)
 	}
 	switch config.UpdateChannel {
 	case "", "stable", "beta":

@@ -1,0 +1,14 @@
+[Unit]
+Description=Load this device owner's preserved modem and Wi-Fi firmware
+RequiresMountsFor=/var/lib/nassimhub
+After=var-lib-nassimhub.mount
+Before=rmtfs.service ModemManager.service NetworkManager.service nassimhub-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/nassimhub-device-firmware
+RemainAfterExit=yes
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

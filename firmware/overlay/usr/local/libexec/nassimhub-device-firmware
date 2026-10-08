@@ -1,0 +1,80 @@
+#!/bin/sh
+# Load only the owner's firmware from the owner's mounted NSHSTATE.
+# No firmware, calibration, private key or enable marker is shipped here.
+set -eu
+LC_ALL=C
+export LC_ALL
+case ${1:-} in '') check=no;; --check) check=yes;; *) exit 2;; esac
+base=/var/lib/nassimhub/.private-firmware
+dest=/usr/lib/firmware
+if [ ! -e "$base" ]; then
+ echo 'device firmware: no owner-supplied bundle; modem/Wi-Fi not provisioned'
+ exit 0
+fi
+/usr/local/libexec/nassimhub-state-check
+test -d "$base"
+test ! -L "$base"
+test "$(stat -c '%u:%a' "$base")" = 0:700
+test -f "$base/SHA256SUMS"
+test ! -L "$base/SHA256SUMS"
+test "$(stat -c '%u:%a' "$base/SHA256SUMS")" = 0:600
+# Validate EVERY name before sha256sum opens anything. Neither arbitrary paths
+# nor executable/configuration files can be smuggled into this firmware bundle.
+awk '
+ NF != 2 || length($1) != 64 || $1 ~ /[^0-9a-f]/ { exit 1 }
+ $2 !~ /^(modem\.b[0-9][0-9]|modem\.mdt|mba\.mbn|wcnss\.b[0-9][0-9]|wcnss\.mdt|wlan\/prima\/WCNSS_qcom_cfg\.ini|wlan\/prima\/WCNSS_cfg\.dat|wlan\/prima\/WCNSS_qcom_wlan_nv\.bin)$/ { exit 1 }
+ seen[$2]++ { exit 1 }
+ END { if (!seen["modem.mdt"] || !seen["mba.mbn"] || !seen["wcnss.mdt"]) exit 1 }
+' "$base/SHA256SUMS"
+for dir in "$base/wlan" "$base/wlan/prima"; do
+ if [ -e "$dir" ] || [ -L "$dir" ]; then
+  test -d "$dir"
+  test ! -L "$dir"
+  test "$(stat -c '%u:%a' "$dir")" = 0:700
+ fi
+done
+while read -r digest relative; do
+ test -f "$base/$relative"
+ test ! -L "$base/$relative"
+ test "$(stat -c '%u:%a' "$base/$relative")" = 0:600
+done < "$base/SHA256SUMS"
+(cd "$base" && sha256sum --status -c SHA256SUMS)
+if [ "$check" = yes ]; then
+ echo 'device firmware: owner bundle verified; nothing changed'
+ exit 0
+fi
+# Stage and verify all bytes first. Files remain root-owned; no processes or
+# remoteprocs are stopped, and no NV or calibration partition is written.
+if [ -e "$dest" ] || [ -L "$dest" ]; then
+ test -d "$dest"
+ test ! -L "$dest"
+else
+ # A clean Debian image may contain no firmware package or destination yet.
+ install -d -m 0755 "$dest"
+fi
+for dir in "$dest/wlan" "$dest/wlan/prima"; do
+ if [ -e "$dir" ] || [ -L "$dir" ]; then
+  test -d "$dir"
+  test ! -L "$dir"
+ fi
+done
+stage=$(mktemp -d "$dest/.nassimhub-stage.XXXXXX")
+trap 'rm -rf "$stage"' EXIT HUP INT TERM
+while read -r digest relative; do
+ mkdir -p "$stage/$(dirname "$relative")"
+ install -m 0600 "$base/$relative" "$stage/$relative"
+ if [ -e "$dest/$relative" ] || [ -L "$dest/$relative" ]; then
+  test -f "$dest/$relative"
+  test ! -L "$dest/$relative"
+  cmp -s "$stage/$relative" "$dest/$relative" || {
+   echo 'device firmware: different existing firmware; manual review required' >&2
+   exit 1
+  }
+ fi
+done < "$base/SHA256SUMS"
+(cd "$stage" && sha256sum --status -c "$base/SHA256SUMS")
+while read -r digest relative; do
+ mkdir -p "$dest/$(dirname "$relative")"
+ if [ ! -e "$dest/$relative" ]; then mv "$stage/$relative" "$dest/$relative"; fi
+done < "$base/SHA256SUMS"
+echo 'device firmware: owner bundle loaded; running radio left untouched'

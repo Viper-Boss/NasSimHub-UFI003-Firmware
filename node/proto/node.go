@@ -65,6 +65,7 @@ type Capabilities struct {
 	MobileData       bool     `json:"mobile_data"`
 	VoiceControl     bool     `json:"voice_control"`
 	VoiceAudio       bool     `json:"voice_audio"`
+	DTMF             bool     `json:"dtmf,omitempty"`
 	VoLTE            Tristate `json:"volte"`
 	WiFiProvisioning bool     `json:"wifi_provisioning"`
 	Logs             bool     `json:"logs"`

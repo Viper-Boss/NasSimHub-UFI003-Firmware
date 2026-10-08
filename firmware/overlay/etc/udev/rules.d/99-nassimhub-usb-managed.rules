@@ -1,0 +1,2 @@
+# Debian defaults to NM_UNMANAGED=1 for USB gadgets. Manage only our USB link.
+SUBSYSTEM=="net", ACTION=="add|change|move", ENV{DEVTYPE}=="gadget", KERNEL=="usb0", ENV{NM_UNMANAGED}="0"

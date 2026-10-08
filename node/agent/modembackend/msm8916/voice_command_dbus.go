@@ -32,13 +32,13 @@ func commandCallFromProperties(path string, props map[string]dbus.Variant) (prot
 	return call, nil
 }
 
-func (b *Backend) commandVoiceDBus(ctx context.Context, operation, id, path string, incomingOnly bool) (proto.CallReceipt, error) {
+func (b *Backend) commandVoiceDBus(ctx context.Context, operation, id, path, service string, incomingOnly bool) (proto.CallReceipt, error) {
 	conn, err := activeBus(ctx)
 	if err != nil {
 		return proto.CallReceipt{}, proto.Unavailable(operation, "ModemManager is unavailable", err)
 	}
 	var props map[string]dbus.Variant
-	object := conn.Object(modemManagerService, dbus.ObjectPath(path))
+	object := conn.Object(service, dbus.ObjectPath(path))
 	err = object.CallWithContext(ctx, "org.freedesktop.DBus.Properties.GetAll", dbus.FlagNoAutoStart, callInterface).Store(&props)
 	if err != nil {
 		if e, ok := err.(dbus.Error); ok && e.Name == "org.freedesktop.DBus.Error.UnknownObject" {

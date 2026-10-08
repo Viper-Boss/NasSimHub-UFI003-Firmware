@@ -186,3 +186,39 @@ func TestTheShippedSampleIsValid(t *testing.T) {
 			"nothing here reads one and the file must not teach operators to put one in it")
 	}
 }
+
+// provisioning_ap gates a feature whose hardware support is unknown, so the
+// two values must mean exactly what the sample file says and nothing else may
+// be accepted.
+func TestProvisioningAPIsAutoOrOff(t *testing.T) {
+	t.Parallel()
+
+	if Default().ProvisioningAP != "off" {
+		t.Fatalf("the default is %q", Default().ProvisioningAP)
+	}
+	for value, want := range map[string]string{"auto": "auto", "off": "off", "OFF": "off", `"auto"`: "auto"} {
+		config, err := Parse(strings.NewReader("provisioning_ap = " + value + "\n"))
+		if err != nil || config.ProvisioningAP != want {
+			t.Fatalf("provisioning_ap = %s parsed as %q, %v", value, config.ProvisioningAP, err)
+		}
+		if err := Validate(config); err != nil {
+			t.Fatalf("provisioning_ap = %s does not validate: %v", value, err)
+		}
+	}
+	for _, value := range []string{"on", "true", "always", ""} {
+		config, err := Parse(strings.NewReader("provisioning_ap = " + value + "\n"))
+		if err != nil {
+			t.Fatalf("parse %q: %v", value, err)
+		}
+		if err := Validate(config); err == nil || !strings.Contains(err.Error(), "provisioning_ap") {
+			t.Fatalf("provisioning_ap = %q was accepted: %v", value, err)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "nassimhub-agent.conf"))
+	if err != nil {
+		t.Skipf("no sample file: %v", err)
+	}
+	if !strings.Contains(string(raw), "\nprovisioning_ap = off\n") {
+		t.Fatal("the shipped sample does not document provisioning_ap")
+	}
+}

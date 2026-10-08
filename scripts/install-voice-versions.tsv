@@ -1,0 +1,103 @@
+# Version strings for install-voice.sh's reader and proto.ParseVersion (node/proto/compat.go).
+# One case per line: EXPECTED <TAB> INPUT. EXPECTED is `ok MAJOR MINOR PATCH` or `reject`.
+# INPUT is the string with every byte outside printable ASCII, and space, `\` and `%`, written as a
+# three-digit octal escape (\040 is a space); an empty INPUT is the empty string.
+# Read by scripts/test-install-voice.sh (shell reader against EXPECTED) and by
+# test/voiceinstall (proto.ParseVersion against EXPECTED and against the shell reader).
+# The firmware repository carries an identical copy beside its copy of the harness.
+ok 1 2 3	1.2.3
+ok 1 2 3	v1.2.3
+ok 1 2 0	1.2
+ok 1 0 0	1
+ok 0 0 0	0
+ok 1 15 1	1.15.1
+ok 1 15 0	1.15.0-node.1
+ok 1 2 0	1.2.0-rc1
+ok 1 2 3	1.2.3+build.7
+ok 1 2 3	1.2.3-rc1+build
+ok 1 2 3	1.2.3+build-rc1
+ok 1 0 0	1-2.3.4.5
+ok 1 0 0	1+..
+ok 1 2 3	\0401.2.3\040
+ok 1 2 3	\0111.2.3\012
+ok 1 2 3	\015\0121.2.3\015\012
+ok 1 2 3	\013\0141.2.3\014\013
+ok 1 2 3	\302\2401.2.3\302\240
+ok 1 2 3	\302\2051.2.3\302\205
+ok 1 2 3	\341\232\2001.2.3
+ok 1 2 3	\342\200\2001.2.3\342\200\212
+ok 1 2 3	1.2.3\342\200\250\342\200\251
+ok 1 2 3	\342\200\2571.2.3\342\201\237
+ok 1 2 3	\343\200\200\040v1.2.3\040\343\200\200
+ok 1 2 3	01.002.0003
+ok 0 0 0	000.00.0
+ok 0 0 7	0.0.007
+ok 9223372036854775807 0 0	9223372036854775807
+ok 1 9223372036854775807 9223372036854775807	1.9223372036854775807.9223372036854775807
+ok 9223372036854775807 0 0	0009223372036854775807
+ok 999999999999999999 0 0	999999999999999999
+ok 1 2 3	v1.2.3-
+ok 1 2 3	1.2.3-x\040y
+reject	
+reject	\040
+reject	v
+reject	\040v\040
+reject	dev
+reject	devel
+reject	unknown
+reject	voice-test
+reject	1.15.0.1
+reject	1.2.3.4-rc1
+reject	1..2
+reject	.1
+reject	1.
+reject	1.2.
+reject	.
+reject	..
+reject	-1
+reject	+1
+reject	-
+reject	+
+reject	v-1
+reject	vv1
+reject	V1.2.3
+reject	v\0401.2.3
+reject	1\040.2
+reject	1.\0402
+reject	1.2.3\0404
+reject	1.2.x
+reject	1.2a
+reject	a1.2
+reject	1_000
+reject	0x10
+reject	1e3
+reject	1,2
+reject	1.2.3\302
+reject	\2401.2.3
+reject	1.2.3\205
+reject	\357\274\221.2
+reject	\331\243
+reject	1.2\342\200\213
+reject	\357\273\2771.2.3
+reject	9223372036854775808
+reject	1.9223372036854775808
+reject	99999999999999999999999999
+reject	1.2.18446744073709551616
+reject	1\0122
+reject	1.2.3\0124
+reject	1.2\045s
+reject	1\134.2
+reject	*
+reject	1.*
+reject	[0-9]
+reject	?
+reject	$(echo\0401)
+reject	`echo\0401`
+reject	1;2
+reject	'1'
+reject	"1"
+reject	1.2.3\177
+reject	\033[0m1
+ok 1 0 0	1-*
+ok 1 2 0	1.2+$(x)
+ok 2 0 0	v2-\377\376

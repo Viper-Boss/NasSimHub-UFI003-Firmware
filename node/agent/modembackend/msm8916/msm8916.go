@@ -35,9 +35,12 @@ type Options struct {
 	Now func() time.Time
 	// ReadOnly enables ModemManager status queries. It never starts, enables,
 	// resets or configures the modem; unavailable services remain offline.
-	ReadOnly        bool
-	SMSWrite        bool
-	VoiceWrite      bool
+	ReadOnly   bool
+	SMSWrite   bool
+	VoiceWrite bool
+	// VoiceDTMF is enabled only after the installed modem profile passes DTMF acceptance.
+	VoiceDTMF       bool
+	DTMFCommand     func(context.Context, string, string) error
 	VoiceAudioReady func(context.Context) bool
 	SMSStateDir     string
 	SMSBus          SMSBus
@@ -46,11 +49,16 @@ type Options struct {
 	IMSProfilePath string
 	// RunQMI is injectable for IMS registration tests.
 	RunQMI func(context.Context) (string, error)
+	// ReadOwnNumber reads a protected result for this exact SIM when the
+	// normal modem number property is empty. It never opens the raw modem.
+	ReadOwnNumber func(string) (string, error)
 	// Run is injectable for tests. The production runner executes mmcli only.
 	Run func(context.Context, ...string) (string, error)
 	// RunBusctl reads individual D-Bus call properties. The target mmcli 1.22
 	// crashes when querying an existing call object, so call details bypass it.
 	RunBusctl func(context.Context, ...string) (string, error)
+	// CallEpoch injects a modem lifetime for transport tests only.
+	CallEpoch func(context.Context) (string, error)
 }
 
 // Backend is a status-only observer until radio functions pass hardware tests.
@@ -109,6 +117,7 @@ func (b *Backend) Capabilities(ctx context.Context) (proto.Capabilities, error) 
 		MobileData:       false,
 		VoiceControl:     voiceReady,
 		VoiceAudio:       voiceReady,
+		DTMF:             voiceReady && b.options.VoiceDTMF,
 		VoLTE:            volte,
 		WiFiProvisioning: false,
 		Logs:             true,
@@ -187,17 +196,50 @@ func (b *Backend) DeleteSMS(ctx context.Context, id string) error {
 }
 
 func (b *Backend) ListCalls(ctx context.Context) ([]proto.Call, error) {
-	if b.options.ReadOnly {
-		if b.options.Run == nil && b.options.RunBusctl == nil {
-			return b.listCallsDBus(ctx)
-		}
-		return b.listReadOnlyCalls(ctx)
+	if !b.options.ReadOnly {
+		return nil, proto.NotSupported("list_calls", unimplemented)
 	}
-	return nil, proto.NotSupported("list_calls", unimplemented)
+	epoch, _, err := b.callLifetime(ctx)
+	if err != nil {
+		return nil, proto.Unavailable("list_calls", "cannot identify modem lifetime", err)
+	}
+	var calls []proto.Call
+	if b.options.Run == nil && b.options.RunBusctl == nil {
+		calls, err = b.listCallsDBus(ctx)
+	} else {
+		calls, err = b.listReadOnlyCalls(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	after, _, err := b.callLifetime(ctx)
+	if err != nil || after != epoch {
+		return nil, proto.Unavailable("list_calls", "modem lifetime changed during observation", err)
+	}
+	for i := range calls {
+		calls[i].ID = scopeCallID(epoch, calls[i].ID)
+	}
+	return calls, nil
 }
 
 func (b *Backend) Dial(ctx context.Context, request proto.DialRequest) (proto.CallReceipt, error) {
-	return b.dialVoice(ctx, request)
+	if err := b.voiceEnabled("dial"); err != nil {
+		return proto.CallReceipt{}, err
+	}
+	epoch, _, err := b.callLifetime(ctx)
+	if err != nil {
+		return proto.CallReceipt{}, proto.Unavailable("dial", "cannot identify modem lifetime", err)
+	}
+	receipt, err := b.dialVoice(ctx, request)
+	if err != nil {
+		return receipt, err
+	}
+	after, _, err := b.callLifetime(ctx)
+	if err != nil || after != epoch {
+		return proto.CallReceipt{}, proto.Unavailable("dial", "modem lifetime changed during dial; inspect live calls", err)
+	}
+	receipt.CallID = scopeCallID(epoch, receipt.CallID)
+	return receipt, nil
 }
 
 func (b *Backend) Answer(ctx context.Context, callID string) (proto.CallReceipt, error) {

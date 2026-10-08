@@ -220,6 +220,26 @@ func TestScanReturnsNeighbourhood(t *testing.T) {
 	}
 }
 
+func TestScanCarriesTheSameSupportHintsAsTheHardwareBackend(t *testing.T) {
+	backend, _, ctx := newBackend(t, Options{})
+	result, err := backend.Scan(ctx)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	want := map[string]proto.WiFiSupport{
+		"HomeNet": proto.WiFiSupportVerified, "HomeNet-5G": proto.WiFiSupportUnverified,
+		"Neighbour-2.4": proto.WiFiSupportUnverified, "FreeWiFi": proto.WiFiSupportUnverified,
+	}
+	for _, network := range result.Networks {
+		if network.Support != want[network.SSID] || network.SupportReason == "" {
+			t.Fatalf("%s: support %q (%q), want %q", network.SSID, network.Support, network.SupportReason, want[network.SSID])
+		}
+	}
+	if DefaultVisible()[0].Support != "" {
+		t.Fatal("the hint was written into the shared neighbourhood instead of the result")
+	}
+}
+
 func marshal(t *testing.T, value any) string {
 	t.Helper()
 	encoded, err := json.Marshal(value)

@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh NasSimHub SIM subscriber number
+
+[Timer]
+OnBootSec=15s
+OnUnitInactiveSec=30s
+AccuracySec=2s
+Unit=nassimhub-sim-number.service
+
+[Install]
+WantedBy=timers.target

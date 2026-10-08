@@ -30,7 +30,7 @@ func TestReadOnlyVoiceListMapsIncomingCall(t *testing.T) {
 	const modem = "/org/freedesktop/ModemManager1/Modem/1"
 	const call = "/org/freedesktop/ModemManager1/Call/7"
 	const sim = "/org/freedesktop/ModemManager1/SIM/1"
-	backend := New(Options{ReadOnly: true, Run: func(_ context.Context, args ...string) (string, error) {
+	backend := New(Options{ReadOnly: true, CallEpoch: func(context.Context) (string, error) { return modemCallEpoch("boot", "bus", ":1.2"), nil }, Run: func(_ context.Context, args ...string) (string, error) {
 		switch strings.Join(args, " ") {
 		case "-K -L":
 			return "modem-list.value[1] : " + modem + "\n", nil
@@ -60,7 +60,7 @@ func TestReadOnlyVoiceListMapsIncomingCall(t *testing.T) {
 		t.Fatalf("calls = %#v, %v", calls, err)
 	}
 	got := calls[0]
-	if got.ID != "mm-7" || got.SIMID != "8900000000000000000" || got.Direction != proto.DirectionIncoming || got.State != proto.CallRinging {
+	if got.ID != scopeCallID(modemCallEpoch("boot", "bus", ":1.2"), "mm-7") || got.SIMID != "8900000000000000000" || got.Direction != proto.DirectionIncoming || got.State != proto.CallRinging {
 		t.Fatalf("incoming call mapping = %#v", got)
 	}
 }

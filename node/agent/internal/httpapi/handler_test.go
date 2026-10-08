@@ -374,14 +374,14 @@ func TestUnpairedNodeCannotSendSMS(t *testing.T) {
 	n := newNode(t, mock.ChinaMobile)
 
 	// No credential at all.
-	anonymous := n.do("POST", "/v1/sms/send", proto.SendSMSRequest{RequestID: "r1", To: "+8613800138000", Text: "hi"})
+	anonymous := n.do("POST", "/v1/sms/send", proto.SendSMSRequest{RequestID: "r1", To: "+8610000000001", Text: "hi"})
 	defer anonymous.Body.Close()
 	if anonymous.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("an anonymous send returned %d, want 401", anonymous.StatusCode)
 	}
 
 	// A plausible-looking but unissued token.
-	invented := n.auth("not-a-real-token", "POST", "/v1/sms/send", proto.SendSMSRequest{RequestID: "r2", To: "+8613800138000", Text: "hi"})
+	invented := n.auth("not-a-real-token", "POST", "/v1/sms/send", proto.SendSMSRequest{RequestID: "r2", To: "+8610000000001", Text: "hi"})
 	defer invented.Body.Close()
 	if invented.StatusCode != http.StatusForbidden && invented.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("an invented token returned %d", invented.StatusCode)
@@ -417,6 +417,7 @@ func TestEveryPrivilegedEndpointRequiresAuthentication(t *testing.T) {
 		{"POST", "/v1/calls/dial", proto.DialRequest{RequestID: "r", To: "1"}},
 		{"POST", "/v1/calls/abc/answer", nil},
 		{"POST", "/v1/calls/abc/hangup", nil},
+		{"POST", "/v1/calls/mm-7/dtmf", proto.DTMFRequest{RequestID: "auth-dtmf", Digits: "1"}},
 		{"GET", "/v1/calls/abc/media", nil},
 		{"GET", "/v1/wifi", nil},
 		{"POST", "/v1/wifi/scan", nil},
@@ -459,7 +460,7 @@ func TestDialIsRefusedWhenVoiceCapabilityIsFalse(t *testing.T) {
 		t.Fatalf("voice detail is %+v", advertised.Voice)
 	}
 
-	response := n.auth(token, "POST", "/v1/calls/dial", proto.DialRequest{RequestID: "d1", To: "+8613900139000"})
+	response := n.auth(token, "POST", "/v1/calls/dial", proto.DialRequest{RequestID: "d1", To: "+8610000000010"})
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusNotImplemented {
 		t.Fatalf("dial on a voiceless node returned %d, want 501", response.StatusCode)
@@ -482,8 +483,8 @@ func TestModemOfflineReturnsServiceUnavailableNotInternalError(t *testing.T) {
 	}{
 		{"GET", "/v1/sms", nil},
 		{"GET", "/v1/calls", nil},
-		{"POST", "/v1/sms/send", proto.SendSMSRequest{RequestID: "r1", To: "+8613800138000", Text: "x"}},
-		{"POST", "/v1/calls/dial", proto.DialRequest{RequestID: "d1", To: "+8613800138000"}},
+		{"POST", "/v1/sms/send", proto.SendSMSRequest{RequestID: "r1", To: "+8610000000001", Text: "x"}},
+		{"POST", "/v1/calls/dial", proto.DialRequest{RequestID: "d1", To: "+8610000000001"}},
 	} {
 		response := n.auth(token, c.method, c.path, c.body)
 		status := response.StatusCode
@@ -640,7 +641,7 @@ func TestSMSBodyAndNumberNeverAppearInLogs(t *testing.T) {
 	token := n.pair(core)
 
 	const code = "482913"
-	const recipient = "+8613912345678"
+	const recipient = "+8610000000012"
 	send := n.auth(token, "POST", "/v1/sms/send", proto.SendSMSRequest{
 		RequestID: "r1", To: recipient, Text: "your verification code is " + code,
 	})
@@ -737,7 +738,7 @@ func TestMSM8916StubServesTheSameProtocol(t *testing.T) {
 		t.Fatalf("stub VoLTE is %s", shape.VoLTE)
 	}
 
-	dial := n.auth(token, "POST", "/v1/calls/dial", proto.DialRequest{RequestID: "d1", To: "+8613800138000"})
+	dial := n.auth(token, "POST", "/v1/calls/dial", proto.DialRequest{RequestID: "d1", To: "+8610000000001"})
 	defer dial.Body.Close()
 	if dial.StatusCode != http.StatusNotImplemented {
 		t.Fatalf("stub dial returned %d, want 501", dial.StatusCode)

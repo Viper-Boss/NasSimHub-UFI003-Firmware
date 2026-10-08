@@ -16,11 +16,11 @@ import (
 //
 //	confidentiality   protects a session recorded today from being read later.
 //	                  ML-KEM. Working now.
-//	authentication    proves who a peer is, live. ML-DSA. Designed, not enabled.
-//	OTA authenticity  proves who built this update. ML-DSA. Designed, not
-//	                  enabled - and the one with the longest tail, because a
-//	                  device installs what it is told to install, and a forged
-//	                  update is game over in a way a forged session is not.
+//	authentication    proves who a peer is, live. ML-DSA (crypto/mldsa).
+//	OTA authenticity  proves who built this update. ML-DSA (crypto/mldsa) - and
+//	                  the one with the longest tail, because a device installs
+//	                  what it is told to install, and a forged update is game
+//	                  over in a way a forged session is not.
 //
 // An attacker who can forge Ed25519 in 2040 can sign an update for a device
 // still running in 2040. That device is in a cupboard and nobody is watching

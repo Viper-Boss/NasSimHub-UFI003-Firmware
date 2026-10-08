@@ -65,6 +65,11 @@ type Backend interface {
 // can accept ATD and set up a call leg while having no usable PCM path to the
 // host; presenting that as a single boolean is what produces a dial button that
 // connects a call nobody can hear.
+// DTMFSender is optional so frozen modem backends need not implement it.
+type DTMFSender interface {
+	SendDTMF(context.Context, string, proto.DTMFRequest) (proto.CallReceipt, error)
+}
+
 type VoiceCapability struct {
 	// Control is whether the Node can originate, answer and end calls.
 	Control bool `json:"control"`

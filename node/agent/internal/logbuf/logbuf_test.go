@@ -16,8 +16,8 @@ func TestRedactionRemovesEverySensitiveShape(t *testing.T) {
 		input string
 		leak  string
 	}{
-		{"phone international", "incoming call from +8613800138000", "8613800138000"},
-		{"phone national", "dialing 13800138000 now", "13800138000"},
+		{"phone international", "incoming call from +8610000000001", "8610000000001"},
+		{"phone national", "dialing 10000000001 now", "10000000001"},
 		{"iccid", "sim iccid 89860412345678901234 ready", "89860412345678901234"},
 		{"imsi", "attached with imsi 460001234567890", "460001234567890"},
 		{"bearer", "auth header Bearer aGVsbG8td29ybGQtdG9rZW4", "aGVsbG8td29ybGQtdG9rZW4"},
